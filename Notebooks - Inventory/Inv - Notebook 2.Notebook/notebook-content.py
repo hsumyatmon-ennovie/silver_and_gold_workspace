@@ -1285,6 +1285,22 @@ display(spark.sql("""
         FROM `Silver_BC_Lakehouse`.bc.`Prod Order Line` pol
         WHERE pol.Status IN ('Released','Firm Planned')           -- เปลี่ยนตรงนี้
         GROUP BY pol.`Prod. Order No.`, pol.Status
+    ),
+
+    pod_src AS (
+        -- engine-anchored due date: one row per prod_order_no, latest engine_run
+        SELECT prod_order_no, planned_prod_order_due_date
+        FROM (
+            SELECT
+                prod_order_no,
+                prod_order_due_date AS planned_prod_order_due_date,
+                ROW_NUMBER() OVER (
+                    PARTITION BY prod_order_no
+                    ORDER BY engine_run_ts DESC
+                ) AS rn
+            FROM `Gold_Production_Lakehouse`.prod.planning_operation_due
+        )
+        WHERE rn = 1
     )
 
     SELECT
@@ -1297,7 +1313,7 @@ display(spark.sql("""
         pq.finished_qty,
         po.`Starting Date`     AS starting_date,
         po.`Ending Date`       AS ending_date,
-        po.`Due Date`          AS due_date,
+        COALESCE(pod.planned_prod_order_due_date, po.`Due Date`) AS due_date,
         po.`Sales Order No.`   AS sales_order_no,
         dim.customer_name,
         dim.product_group
@@ -1308,6 +1324,8 @@ display(spark.sql("""
     LEFT JOIN pro_line_qty pq
         ON pq.prod_order_no = mp.prod_order_no
        AND pq.pro_status    = mp.pro_status
+    LEFT JOIN pod_src pod
+        ON pod.prod_order_no = mp.prod_order_no
     LEFT JOIN item_dim dim
         ON dim.item_no = po.`Source No.`
     ORDER BY mp.pro_status, dim.customer_name, mp.prod_order_no
