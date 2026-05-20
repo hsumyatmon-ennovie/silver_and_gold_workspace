@@ -152,6 +152,23 @@ from datetime import datetime
 # MAGIC     FROM Silver_BC_Lakehouse.bc.`Item` I
 # MAGIC ),
 # MAGIC 
+# MAGIC /* engine-anchored due dates: latest engine_run per (prod_order_no, prod_order_line_no) */
+# MAGIC pod_src AS (
+# MAGIC     SELECT prod_order_no, prod_order_line_no, prod_order_due_date AS planned_prod_order_due_date
+# MAGIC     FROM (
+# MAGIC         SELECT
+# MAGIC             prod_order_no,
+# MAGIC             prod_order_line_no,
+# MAGIC             prod_order_due_date,
+# MAGIC             ROW_NUMBER() OVER (
+# MAGIC                 PARTITION BY prod_order_no, prod_order_line_no
+# MAGIC                 ORDER BY engine_run_ts DESC
+# MAGIC             ) AS rn
+# MAGIC         FROM Gold_Production_Lakehouse.prod.planning_operation_due
+# MAGIC     )
+# MAGIC     WHERE rn = 1
+# MAGIC ),
+# MAGIC 
 # MAGIC s_src AS (
 # MAGIC     SELECT
 # MAGIC         prod_order_no,
@@ -204,8 +221,8 @@ from datetime import datetime
 # MAGIC         po.item_size,  -- ✅ carry forward item_size
 # MAGIC         po.prod_order_starting_date_time,
 # MAGIC         po.prod_order_ending_date_time,
-# MAGIC         po.prod_order_due_date,
-# MAGIC         weekofyear(po.prod_order_due_date) AS commit_week,
+# MAGIC         coalesce(pod.planned_prod_order_due_date, po.prod_order_due_date) AS prod_order_due_date,
+# MAGIC         weekofyear(coalesce(pod.planned_prod_order_due_date, po.prod_order_due_date)) AS commit_week,
 # MAGIC         pl.prod_line_due_date,
 # MAGIC         po.prod_order_finished_date,
 # MAGIC         po.prod_order_quantity,
@@ -229,6 +246,9 @@ from datetime import datetime
 # MAGIC     FROM po_src po
 # MAGIC     LEFT JOIN pl_src pl
 # MAGIC         ON po.prod_order_no = pl.prod_order_no
+# MAGIC     LEFT JOIN pod_src pod
+# MAGIC         ON po.prod_order_no = pod.prod_order_no
+# MAGIC        AND pl.prod_order_line_no = pod.prod_order_line_no
 # MAGIC ),
 # MAGIC 
 # MAGIC /* ============================================================
