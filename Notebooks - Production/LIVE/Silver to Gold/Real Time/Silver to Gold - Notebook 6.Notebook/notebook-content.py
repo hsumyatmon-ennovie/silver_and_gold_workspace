@@ -1305,14 +1305,12 @@ print("Full refresh of gold_compare_plan_vs_actual completed.")
 # CELL ********************
 
 from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 
 # -------------------------------------------------------------------
 # Config
 # -------------------------------------------------------------------
 SOURCE_TABLE = "Silver_Production_Lakehouse.prod.silver_loading_capacity"
 TARGET_TABLE = "Gold_Production_Lakehouse.prod.gold_loading_capacity"
-PLANNING_OPERATION_DUE = "Gold_Production_Lakehouse.prod.planning_operation_due"
 
 # -------------------------------------------------------------------
 # Helper: add 7 hours and cast to date
@@ -1329,30 +1327,6 @@ def add_7h_to_date(col_name: str):
 # Load source
 # -------------------------------------------------------------------
 src = spark.table(SOURCE_TABLE)
-
-# Override prod_order_due_date with the engine-anchored value from
-# planning_operation_due (latest engine_run per prod_order_no/line),
-# falling back to the silver value when planning has no matching row.
-_pod_w = Window.partitionBy("prod_order_no", "prod_order_line_no").orderBy(F.col("engine_run_ts").desc())
-_pod_df = (
-    spark.table(PLANNING_OPERATION_DUE)
-    .select(
-        "prod_order_no", "prod_order_line_no",
-        F.col("prod_order_due_date").alias("planned_prod_order_due_date"),
-        "engine_run_ts",
-    )
-    .withColumn("_rn", F.row_number().over(_pod_w))
-    .filter(F.col("_rn") == 1)
-    .drop("_rn", "engine_run_ts")
-)
-src = (
-    src.join(_pod_df, ["prod_order_no", "prod_order_line_no"], "left")
-       .withColumn(
-           "prod_order_due_date",
-           F.coalesce(F.col("planned_prod_order_due_date"), F.col("prod_order_due_date")),
-       )
-       .drop("planned_prod_order_due_date")
-)
 
 # -------------------------------------------------------------------
 # Transform (FULL FIXED VERSION)
