@@ -974,10 +974,27 @@ from datetime import datetime
 # MAGIC   FROM Gold_Production_Lakehouse.prod.gold_production_status
 # MAGIC ),
 # MAGIC 
+# MAGIC -- engine-anchored due date: one row per prod_order_no (latest engine_run)
+# MAGIC -- because po_src is at order-header grain.
+# MAGIC pod_src AS (
+# MAGIC   SELECT prod_order_no, planned_prod_order_due_date
+# MAGIC   FROM (
+# MAGIC     SELECT
+# MAGIC       prod_order_no,
+# MAGIC       prod_order_due_date AS planned_prod_order_due_date,
+# MAGIC       ROW_NUMBER() OVER (
+# MAGIC         PARTITION BY prod_order_no
+# MAGIC         ORDER BY engine_run_ts DESC
+# MAGIC       ) AS rn
+# MAGIC     FROM Gold_Production_Lakehouse.prod.planning_operation_due
+# MAGIC   )
+# MAGIC   WHERE rn = 1
+# MAGIC ),
+# MAGIC 
 # MAGIC -- ------------------ Join + filters ------------------
 # MAGIC base AS (
 # MAGIC   SELECT
-# MAGIC     po.prod_order_due_date,
+# MAGIC     coalesce(pod.planned_prod_order_due_date, po.prod_order_due_date) AS prod_order_due_date,
 # MAGIC     po.prod_order_status,
 # MAGIC     po.prod_order_no,
 # MAGIC     po.prod_order_description,
@@ -1023,6 +1040,8 @@ from datetime import datetime
 # MAGIC   LEFT JOIN pl_src pl
 # MAGIC     ON po.prod_order_no = pl.prod_order_no
 # MAGIC    AND po.FG_item_no = pl.item_no
+# MAGIC   LEFT JOIN pod_src pod
+# MAGIC     ON po.prod_order_no = pod.prod_order_no
 # MAGIC 
 # MAGIC   WHERE
 # MAGIC     it.item_category_code = 'FG'
