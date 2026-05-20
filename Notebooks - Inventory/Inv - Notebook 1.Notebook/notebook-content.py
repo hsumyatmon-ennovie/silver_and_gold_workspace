@@ -2202,13 +2202,29 @@ if not spark.catalog.tableExists(target_tbl):
 # MAGIC         po.`No.`                        AS production_order_no,
 # MAGIC         po.`Source No.`                 AS source_item_no,
 # MAGIC         po.`Description`               AS po_description,
-# MAGIC         po.`Due Date`                   AS po_due_date,
+# MAGIC         -- engine-anchored due date from planning_operation_due (latest engine_run),
+# MAGIC         -- with BC `Due Date` as fallback when planning has no row.
+# MAGIC         COALESCE(pod.planned_prod_order_due_date, po.`Due Date`) AS po_due_date,
 # MAGIC         po.`Quantity`                   AS po_qty,
 # MAGIC         po.`Sales Order No.`           AS po_sales_order_no,
 # MAGIC         po.`For Item`                  AS po_for_item,
 # MAGIC         po.`Shortcut Dimension 1 Code` AS po_global_dim_1,
 # MAGIC         po.`Shortcut Dimension 2 Code` AS po_global_dim_2
 # MAGIC     FROM Silver_BC_Lakehouse.bc.`Production Order` po
+# MAGIC     LEFT JOIN (
+# MAGIC         SELECT prod_order_no, planned_prod_order_due_date
+# MAGIC         FROM (
+# MAGIC             SELECT
+# MAGIC                 prod_order_no,
+# MAGIC                 prod_order_due_date AS planned_prod_order_due_date,
+# MAGIC                 ROW_NUMBER() OVER (
+# MAGIC                     PARTITION BY prod_order_no
+# MAGIC                     ORDER BY engine_run_ts DESC
+# MAGIC                 ) AS rn
+# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_operation_due
+# MAGIC         )
+# MAGIC         WHERE rn = 1
+# MAGIC     ) pod ON pod.prod_order_no = po.`No.`
 # MAGIC ),
 # MAGIC 
 # MAGIC -- =============================================
@@ -3745,6 +3761,22 @@ print("Rows written:", df.count())
 # MAGIC         WHERE rn = 1
 # MAGIC     ),
 # MAGIC 
+# MAGIC     POD_LATEST AS (
+# MAGIC         -- engine-anchored due date: one row per prod_order_no, latest engine_run
+# MAGIC         SELECT prod_order_no, planned_prod_order_due_date
+# MAGIC         FROM (
+# MAGIC             SELECT
+# MAGIC                 prod_order_no,
+# MAGIC                 prod_order_due_date AS planned_prod_order_due_date,
+# MAGIC                 ROW_NUMBER() OVER (
+# MAGIC                     PARTITION BY prod_order_no
+# MAGIC                     ORDER BY engine_run_ts DESC
+# MAGIC                 ) AS rn
+# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_operation_due
+# MAGIC         )
+# MAGIC         WHERE rn = 1
+# MAGIC     ),
+# MAGIC 
 # MAGIC     CTE AS (
 # MAGIC         SELECT
 # MAGIC             pl.`Status` AS Status,
@@ -3843,8 +3875,12 @@ print("Rows written:", df.count())
 # MAGIC                 OVER (PARTITION BY pl.`Prod. Order No.`) AS DATE
 # MAGIC             ) AS FG_Startdate,
 # MAGIC 
-# MAGIC             MAX(CASE WHEN pl.`Line No.` = 10000 THEN pl.`Due Date` END)
-# MAGIC                 OVER (PARTITION BY pl.`Prod. Order No.`) AS FG_duedate,
+# MAGIC             -- FG_duedate now coalesces the engine-anchored planning value with
+# MAGIC             -- the BC line-10000 due date so planning takes precedence.
+# MAGIC             COALESCE(
+# MAGIC                 MAX(pod.planned_prod_order_due_date) OVER (PARTITION BY pl.`Prod. Order No.`),
+# MAGIC                 MAX(CASE WHEN pl.`Line No.` = 10000 THEN pl.`Due Date` END) OVER (PARTITION BY pl.`Prod. Order No.`)
+# MAGIC             ) AS FG_duedate,
 # MAGIC 
 # MAGIC             CAST(
 # MAGIC                 MAX(CASE WHEN pl.`Location Code` = 'CST_CUT' THEN pl.`Starting Date-Time` END)
@@ -3868,6 +3904,9 @@ print("Rows written:", df.count())
 # MAGIC             ON  bom.production_bom_no = pl.`Production BOM No.`
 # MAGIC             AND bom.version_code      = COALESCE(pl.`Production BOM Version Code`, '')
 # MAGIC             AND bom.component_item_no = pc.`Item No.`
+# MAGIC 
+# MAGIC         LEFT JOIN POD_LATEST pod
+# MAGIC             ON pod.prod_order_no = pl.`Prod. Order No.`
 # MAGIC 
 # MAGIC         -- ============================================
 # MAGIC         -- ตัด Finished PROs ออก
