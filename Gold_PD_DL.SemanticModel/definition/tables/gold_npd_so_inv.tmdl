@@ -1,0 +1,199 @@
+table gold_npd_so_inv
+	lineageTag: 7db52e4a-f3df-4c04-a7b4-7ac2f90d968b
+	sourceLineageTag: [pd].[gold_npd_so_inv]
+
+	column SalesorderNo
+		dataType: string
+		lineageTag: 77dc63f7-4f5c-4efc-8242-bf2ef0441211
+		sourceLineageTag: SalesorderNo
+		summarizeBy: none
+		sourceColumn: SalesorderNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column SalesorderLineNo
+		dataType: int64
+		formatString: 0
+		lineageTag: 71d96926-b95f-4e70-bea7-53a2ce38e1ea
+		sourceLineageTag: SalesorderLineNo
+		summarizeBy: sum
+		sourceColumn: SalesorderLineNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column ShipmentNo
+		dataType: string
+		lineageTag: 8c698c89-7ded-4513-8a33-9227948e4416
+		sourceLineageTag: ShipmentNo
+		summarizeBy: none
+		sourceColumn: ShipmentNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column ShipmentLineNo
+		dataType: int64
+		formatString: 0
+		lineageTag: 2b1fbceb-d8ae-462f-901f-b6271203cf41
+		sourceLineageTag: ShipmentLineNo
+		summarizeBy: sum
+		sourceColumn: ShipmentLineNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column InvoiceNo
+		dataType: string
+		lineageTag: 3a232630-a0d6-4e77-9062-61b950ce2d88
+		sourceLineageTag: InvoiceNo
+		summarizeBy: none
+		sourceColumn: InvoiceNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column InvoiceLineNo
+		dataType: int64
+		formatString: 0
+		lineageTag: 79a94355-dae9-452c-b8cb-0faab095ec4b
+		sourceLineageTag: InvoiceLineNo
+		summarizeBy: sum
+		sourceColumn: InvoiceLineNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column Order_Date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 48f8c8e3-a1fe-4bf7-beb4-fcc7be095f1b
+		sourceLineageTag: Order_Date
+		summarizeBy: none
+		sourceColumn: Order_Date
+
+		annotation SummarizationSetBy = Automatic
+
+	column Requested_Delivery_Date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 184cab72-aee7-4b99-bc6a-20c32a35de6b
+		sourceLineageTag: Requested_Delivery_Date
+		summarizeBy: none
+		sourceColumn: Requested_Delivery_Date
+
+		annotation SummarizationSetBy = Automatic
+
+	column Promised_Delivery_Date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: a8465f12-259d-4dd2-b52a-7ec09a75443c
+		sourceLineageTag: Promised_Delivery_Date
+		summarizeBy: none
+		sourceColumn: Promised_Delivery_Date
+
+		annotation SummarizationSetBy = Automatic
+
+	column PostingDate
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: fe5e9e35-5ac6-4a84-882e-8350c987c770
+		sourceLineageTag: PostingDate
+		summarizeBy: none
+		sourceColumn: PostingDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column CustomerNo
+		dataType: string
+		lineageTag: e13ea7cf-8700-40e9-bd43-cc003ead04f5
+		sourceLineageTag: CustomerNo
+		summarizeBy: none
+		sourceColumn: CustomerNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column ItemFG
+		dataType: string
+		lineageTag: 62600fb8-c8b7-4ad6-b9b6-5bd9783fa605
+		sourceLineageTag: ItemFG
+		summarizeBy: none
+		sourceColumn: ItemFG
+
+		annotation SummarizationSetBy = Automatic
+
+	column Description
+		dataType: string
+		lineageTag: ade5740f-6ea6-4808-bddf-96fc42c3d737
+		sourceLineageTag: Description
+		summarizeBy: none
+		sourceColumn: Description
+
+		annotation SummarizationSetBy = Automatic
+
+	column Quantity
+		dataType: double
+		lineageTag: 0f942347-d1b5-4156-aa26-e8c3ead1ad4a
+		sourceLineageTag: Quantity
+		summarizeBy: sum
+		sourceColumn: Quantity
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column Qty_to_Ship
+		dataType: double
+		lineageTag: b934c4e3-b055-4b23-b2a1-4487620b94e7
+		sourceLineageTag: Qty_to_Ship
+		summarizeBy: sum
+		sourceColumn: Qty_to_Ship
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column QtyShip
+		dataType: double
+		lineageTag: 851fd8ca-bcc2-4a1b-b628-d94a15a6ec70
+		sourceLineageTag: QtyShip
+		summarizeBy: sum
+		sourceColumn: QtyShip
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column Qty_to_Invoice
+		dataType: double
+		lineageTag: de430e02-cbcd-4a31-a277-6e49b545f1bb
+		sourceLineageTag: Qty_to_Invoice
+		summarizeBy: sum
+		sourceColumn: Qty_to_Invoice
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column QtyINV
+		dataType: double
+		lineageTag: ffc9ab3b-8317-4ace-9273-64f7c90be58f
+		sourceLineageTag: QtyINV
+		summarizeBy: sum
+		sourceColumn: QtyINV
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column UOM
+		dataType: string
+		lineageTag: a7bcfb6f-9121-4cd9-852f-7aa863bf57a3
+		sourceLineageTag: UOM
+		summarizeBy: none
+		sourceColumn: UOM
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_npd_so_inv = entity
+		mode: directLake
+		source
+			entityName: gold_npd_so_inv
+			schemaName: pd
+			expressionSource: 'DirectLake - Gold_Product_Dev_Lakehouse'
+

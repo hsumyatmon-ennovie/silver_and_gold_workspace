@@ -1,0 +1,187 @@
+{
+  "name": "{{Dataset_Name}}",
+  "compatibilityLevel": 1604,
+  "model": {
+    "name": "{{Dataset_Name}}",
+    "culture": "en-US",
+    "collation": "Latin1_General_100_BIN2_UTF8",
+    "dataAccessOptions": {
+      "legacyRedirects": true,
+      "returnErrorValuesAsNull": true
+    },
+    "defaultPowerBIDataSourceVersion": "powerBI_V3",
+    "sourceQueryCulture": "en-US",
+    "tables": [
+      {
+        "name": "gold_prod_step_casting_production",
+        "sourceLineageTag": "[cmn].[gold_prod_step_casting_production]",
+        "columns": [
+          {
+            "name": "current_operation",
+            "dataType": "string",
+            "sourceColumn": "current_operation",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "current_operation",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "operation_description",
+            "dataType": "string",
+            "sourceColumn": "operation_description",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "operation_description",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "operation_group",
+            "dataType": "string",
+            "sourceColumn": "operation_group",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "operation_group",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "operation_abb",
+            "dataType": "string",
+            "sourceColumn": "operation_abb",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "operation_abb",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sequense",
+            "dataType": "int64",
+            "sourceColumn": "sequense",
+            "formatString": "0",
+            "sourceProviderType": "bigint",
+            "sourceLineageTag": "sequense",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "operation_position",
+            "dataType": "string",
+            "sourceColumn": "operation_position",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "operation_position",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "SeqDep",
+            "dataType": "int64",
+            "sourceColumn": "SeqDep",
+            "formatString": "0",
+            "sourceProviderType": "bigint",
+            "sourceLineageTag": "SeqDep",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "department",
+            "dataType": "string",
+            "sourceColumn": "department",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "department",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "Pro Due Date Offset_Day_",
+            "dataType": "int64",
+            "sourceColumn": "Pro Due Date Offset_Day_",
+            "formatString": "0",
+            "sourceProviderType": "bigint",
+            "sourceLineageTag": "Pro Due Date Offset_Day_",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          }
+        ],
+        "partitions": [
+          {
+            "name": "{{Partition_Name}}",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "gold_prod_step_casting_production",
+              "expressionSource": "DatabaseQuery",
+              "schemaName": "cmn"
+            }
+          }
+        ],
+        "annotations": [
+          {
+            "name": "IsTableInBiModel",
+            "value": "False"
+          }
+        ]
+      }
+    ],
+    "expressions": [
+      {
+        "name": "DatabaseQuery",
+        "kind": "m",
+        "expression": "let\n    database = {{TDS_Endpoint}}\nin\n    database\n"
+      }
+    ],
+    "annotations": [
+      {
+        "name": "__PBI_TimeIntelligenceEnabled",
+        "value": "0"
+      },
+      {
+        "name": "SourceLineageTagType",
+        "value": "DatabaseFullyQualifiedName"
+      }
+    ]
+  }
+}

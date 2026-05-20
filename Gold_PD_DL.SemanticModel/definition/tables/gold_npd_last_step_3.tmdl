@@ -1,0 +1,39 @@
+table gold_npd_last_step_3
+	lineageTag: 2392c631-d90e-468a-a2ae-ecd6ce82f343
+	sourceLineageTag: [pd].[gold_npd_last_step_3]
+
+	column SKT_Number
+		dataType: string
+		lineageTag: a1117ac9-a1f4-4cb0-af8d-9603ff28c496
+		sourceLineageTag: SKT_Number
+		summarizeBy: none
+		sourceColumn: SKT_Number
+
+		annotation SummarizationSetBy = Automatic
+
+	column Worklog_Date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: c2374352-38a9-4de9-ba7b-c1136785fe55
+		sourceLineageTag: Worklog_Date
+		summarizeBy: none
+		sourceColumn: Worklog_Date
+
+		annotation SummarizationSetBy = Automatic
+
+	column Routing_Step
+		dataType: string
+		lineageTag: f9fbed99-f6e6-4f3d-8962-6fa0f28b09da
+		sourceLineageTag: Routing_Step
+		summarizeBy: none
+		sourceColumn: Routing_Step
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_npd_last_step_3 = entity
+		mode: directLake
+		source
+			entityName: gold_npd_last_step_3
+			schemaName: pd
+			expressionSource: 'DirectLake - Gold_Product_Dev_Lakehouse'
+

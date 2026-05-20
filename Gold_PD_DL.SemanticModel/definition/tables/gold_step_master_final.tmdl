@@ -1,0 +1,75 @@
+table gold_step_master_final
+	lineageTag: 95a7fdf3-a9bc-4108-bf8b-47384e84fb9f
+	sourceLineageTag: [pd].[gold_step_master_final]
+
+	column Department
+		dataType: string
+		lineageTag: bcc0ca75-ad94-4f21-95b7-a27d10de69ee
+		sourceLineageTag: Department
+		summarizeBy: none
+		sourceColumn: Department
+
+		annotation SummarizationSetBy = Automatic
+
+	column Code
+		dataType: string
+		lineageTag: f33d1109-1ad8-49a4-8540-38c1e34edd9e
+		sourceLineageTag: Code
+		summarizeBy: none
+		sourceColumn: Code
+
+		annotation SummarizationSetBy = Automatic
+
+	column work_center
+		dataType: string
+		lineageTag: 82e629e7-21a6-4a50-a3e0-a47a9ddcb318
+		sourceLineageTag: work_center
+		summarizeBy: none
+		sourceColumn: work_center
+
+		annotation SummarizationSetBy = Automatic
+
+	column MAP
+		dataType: string
+		lineageTag: eb480ab7-1a7e-421b-a7d4-40040a999734
+		sourceLineageTag: MAP
+		summarizeBy: none
+		sourceColumn: MAP
+
+		annotation SummarizationSetBy = Automatic
+
+	column Sequence
+		dataType: int64
+		formatString: 0
+		lineageTag: 02e8c0db-89e9-40f0-9f5f-3eb040a98406
+		sourceLineageTag: Sequence
+		summarizeBy: sum
+		sourceColumn: Sequence
+
+		annotation SummarizationSetBy = Automatic
+
+	column KEY
+		dataType: string
+		lineageTag: 58a96c29-8261-40cb-954a-83220aab24d3
+		sourceLineageTag: KEY
+		summarizeBy: none
+		sourceColumn: KEY
+
+		annotation SummarizationSetBy = Automatic
+
+	column Key_Abbr
+		dataType: string
+		lineageTag: 019a979c-5cbb-40ba-8e03-4ff200d3573d
+		sourceLineageTag: Key_Abbr
+		summarizeBy: none
+		sourceColumn: Key_Abbr
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_step_master_final = entity
+		mode: directLake
+		source
+			entityName: gold_step_master_final
+			schemaName: pd
+			expressionSource: 'DirectLake - Gold_Product_Dev_Lakehouse'
+

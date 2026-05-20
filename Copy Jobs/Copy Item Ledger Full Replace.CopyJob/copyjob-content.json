@@ -1,0 +1,66 @@
+{
+  "properties": {
+    "jobMode": "Batch",
+    "source": {
+      "type": "LakehouseTable",
+      "connectionSettings": {
+        "type": "Lakehouse",
+        "typeProperties": {
+          "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+          "artifactId": "3ea0efcd-03d5-44f1-8e70-99f52a5c2a22",
+          "rootFolder": "Tables"
+        },
+        "externalReferences": {
+          "connection": "b8242955-00ce-44ea-826a-3b65819cdf8d"
+        }
+      }
+    },
+    "destination": {
+      "type": "LakehouseTable",
+      "connectionSettings": {
+        "type": "Lakehouse",
+        "typeProperties": {
+          "workspaceId": "00000000-0000-0000-0000-000000000000",
+          "artifactId": "c1f0ef1e-95ed-a404-4fd4-98ec3a130b81",
+          "rootFolder": "Tables"
+        },
+        "externalReferences": {
+          "connection": "b8242955-00ce-44ea-826a-3b65819cdf8d"
+        }
+      }
+    },
+    "policy": {
+      "timeout": "0.12:00:00"
+    }
+  },
+  "activities": [
+    {
+      "id": "ad078803-eece-4273-b9a7-64f6e98b5123",
+      "properties": {
+        "source": {
+          "datasetSettings": {
+            "schema": "dbo",
+            "table": "inv.bronze_item_ledger_entry_full_replace"
+          }
+        },
+        "destination": {
+          "writeBehavior": "Append",
+          "datasetSettings": {
+            "schema": "inv",
+            "table": "silver_item_ledger"
+          }
+        },
+        "enableStaging": false,
+        "translator": {
+          "type": "TabularTranslator"
+        },
+        "typeConversionSettings": {
+          "typeConversion": {
+            "allowDataTruncation": true,
+            "treatBooleanAsNumber": false
+          }
+        }
+      }
+    }
+  ]
+}

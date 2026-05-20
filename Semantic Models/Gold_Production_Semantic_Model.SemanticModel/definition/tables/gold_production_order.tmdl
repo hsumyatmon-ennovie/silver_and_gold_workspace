@@ -1,0 +1,170 @@
+table gold_production_order
+	lineageTag: 107217f8-6cac-447d-a77f-d001f29a766a
+	sourceLineageTag: [prod].[gold_production_order]
+
+	column prod_order_due_date
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime2
+		lineageTag: c145735b-5be7-4c79-a654-7bef51507eae
+		sourceLineageTag: prod_order_due_date
+		summarizeBy: none
+		sourceColumn: prod_order_due_date
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_status
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 19ad941d-d68e-4d10-acb4-69f54e01baf8
+		sourceLineageTag: prod_order_status
+		summarizeBy: none
+		sourceColumn: prod_order_status
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_no
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 8c9c083a-d4a3-4d0a-b4ba-247916c91a48
+		sourceLineageTag: prod_order_no
+		summarizeBy: none
+		sourceColumn: prod_order_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_description
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: a0794173-f566-41b0-b96a-73816fc2b7eb
+		sourceLineageTag: prod_order_description
+		summarizeBy: none
+		sourceColumn: prod_order_description
+
+		annotation SummarizationSetBy = Automatic
+
+	column FG_item_no
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: f80e66df-fa0f-483e-938e-6440c437bc2d
+		sourceLineageTag: FG_item_no
+		summarizeBy: none
+		sourceColumn: FG_item_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_routing_no
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: e0eb2bbc-5ca7-499f-bac1-faa6f618ad10
+		sourceLineageTag: item_routing_no
+		summarizeBy: none
+		sourceColumn: item_routing_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_quantity
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 04c7df18-1ce3-4af6-b8de-a073b8c571fa
+		sourceLineageTag: prod_order_quantity
+		summarizeBy: sum
+		sourceColumn: prod_order_quantity
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column prod_order_type
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 54bbb89b-ef7d-4ccb-9a4f-0d9c50d1fcf9
+		sourceLineageTag: prod_order_type
+		summarizeBy: none
+		sourceColumn: prod_order_type
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order_no
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 35ca94d8-3b0c-4cbe-8294-5ba7d958ec16
+		sourceLineageTag: sales_order_no
+		summarizeBy: none
+		sourceColumn: sales_order_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order_line_no
+		dataType: int64
+		formatString: 0
+		sourceProviderType: bigint
+		lineageTag: ff5b7d09-fc3c-47ae-b10c-9b77c6a4c61d
+		sourceLineageTag: sales_order_line_no
+		summarizeBy: sum
+		sourceColumn: sales_order_line_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_material
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 4c17e18b-6cf3-4b57-8a70-ea148b8bd164
+		sourceLineageTag: item_material
+		summarizeBy: none
+		sourceColumn: item_material
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_location
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: a8537ef0-b196-4e3a-919c-e937d7a60812
+		sourceLineageTag: prod_order_location
+		summarizeBy: none
+		sourceColumn: prod_order_location
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_starting_date_time
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime2
+		lineageTag: 912ffbb6-5999-4a95-9377-daa084b8f591
+		sourceLineageTag: prod_order_starting_date_time
+		summarizeBy: none
+		sourceColumn: prod_order_starting_date_time
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_ending_date_time
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime2
+		lineageTag: d594c47a-496d-4e76-8569-e59e34946345
+		sourceLineageTag: prod_order_ending_date_time
+		summarizeBy: none
+		sourceColumn: prod_order_ending_date_time
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_finished_date
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime2
+		lineageTag: afb2439c-0c68-454c-8b12-bd5724a16740
+		sourceLineageTag: prod_order_finished_date
+		summarizeBy: none
+		sourceColumn: prod_order_finished_date
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_production_order = entity
+		mode: directLake
+		source
+			entityName: gold_production_order
+			schemaName: prod
+			expressionSource: DatabaseQuery
+
+	annotation PBI_ResultType = Table
+

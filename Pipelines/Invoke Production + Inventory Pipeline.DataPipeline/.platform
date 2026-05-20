@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "Invoke Production + Inventory Pipeline"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "af0c4f12-5b45-b7d2-4388-c44ceb6cf806"
+  }
+}

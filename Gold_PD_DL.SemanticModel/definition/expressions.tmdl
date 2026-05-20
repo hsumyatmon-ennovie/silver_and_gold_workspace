@@ -1,0 +1,11 @@
+expression 'DirectLake - Gold_Product_Dev_Lakehouse' =
+		let
+		    Source = AzureStorage.DataLake("https://onelake.dfs.fabric.microsoft.com/d74457b3-045c-445d-82c6-9a2e4b9f1436/b78abb0e-d633-4679-b52a-2cfb0797e5c8", [HierarchicalNavigation=true])
+		in
+		    Source
+	lineageTag: 4cbecde5-16aa-4926-9339-857d6f4fc960
+
+	annotation PBI_IncludeFutureArtifacts = False
+
+	annotation PBI_RemovedChildren = [{"remoteItemId":{"analysisServicesObject":{"sourceName":null,"sourceLineageTag":"[pd].[gold_npd_time]"}},"objectType":"Table"}]
+

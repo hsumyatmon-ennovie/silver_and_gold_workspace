@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "CopyJob",
+    "displayName": "Copy Item Ledger Full Replace"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "434e27c0-3ac1-9318-4c73-b24b4bd15db3"
+  }
+}

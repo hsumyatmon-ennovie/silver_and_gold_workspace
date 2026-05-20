@@ -1,0 +1,207 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "type": "SetVariable",
+        "typeProperties": {
+          "variableName": "CurrentTime",
+          "value": {
+            "value": "@pipeline().TriggerTime",
+            "type": "Expression"
+          }
+        },
+        "policy": {
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "SetCurrentTime",
+        "state": "Active",
+        "dependsOn": []
+      },
+      {
+        "type": "IfCondition",
+        "typeProperties": {
+          "expression": {
+            "value": "@if(\n  or(\n    or(\n      less(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 7),\n      greaterOrEquals(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 19)\n    ),\n    or(\n      equals(dayOfWeek(addHours(utcNow(), 7)), 0),\n      equals(dayOfWeek(addHours(utcNow(), 7)), 6)\n    )\n  ),\n  false,\n  true\n)\n",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "type": "TridentNotebook",
+              "typeProperties": {
+                "notebookId": "7c8a9992-5461-bc42-4bf0-3309a618e087",
+                "workspaceId": "00000000-0000-0000-0000-000000000000"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Map Data",
+              "dependsOn": [
+                {
+                  "activity": "Copy Job",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "InvokeCopyJob",
+              "typeProperties": {
+                "copyJobId": "b2a1cb5a-b808-9ca3-4fea-38e40abfb292",
+                "workspaceId": "00000000-0000-0000-0000-000000000000"
+              },
+              "externalReferences": {
+                "connection": "2d196602-f2bc-439b-bcfc-419191910d60"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Copy Job",
+              "dependsOn": []
+            },
+            {
+              "type": "TridentNotebook",
+              "typeProperties": {
+                "notebookId": "2474cffc-cde4-a69e-4d7a-5db8aed0dba8",
+                "workspaceId": "00000000-0000-0000-0000-000000000000"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Copy Silver Production Order Status All",
+              "dependsOn": []
+            },
+            {
+              "type": "Copy",
+              "typeProperties": {
+                "source": {
+                  "type": "ParquetSource",
+                  "storeSettings": {
+                    "type": "AzureBlobStorageReadSettings",
+                    "recursive": true,
+                    "enablePartitionDiscovery": false
+                  },
+                  "formatSettings": {
+                    "type": "ParquetReadSettings"
+                  },
+                  "datasetSettings": {
+                    "type": "Parquet",
+                    "typeProperties": {
+                      "location": {
+                        "type": "LakehouseLocation",
+                        "folderPath": "silver_staging/silver_sync/silver_production_status_all/runs",
+                        "fileName": "batch.parquet"
+                      },
+                      "compressionCodec": "snappy"
+                    },
+                    "schema": [],
+                    "connectionSettings": {
+                      "name": "dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099",
+                      "properties": {
+                        "type": "Lakehouse",
+                        "typeProperties": {
+                          "artifactId": "25adf76d-df18-41c8-97e8-55789149bd80",
+                          "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+                          "rootFolder": "Files"
+                        },
+                        "externalReferences": {
+                          "connection": "b8242955-00ce-44ea-826a-3b65819cdf8d"
+                        },
+                        "annotations": []
+                      }
+                    },
+                    "annotations": []
+                  }
+                },
+                "sink": {
+                  "type": "LakehouseTableSink",
+                  "tableActionOption": "OverwriteSchema",
+                  "applyVOrder": true,
+                  "partitionOption": "None",
+                  "datasetSettings": {
+                    "type": "LakehouseTable",
+                    "typeProperties": {
+                      "schema": "prod",
+                      "table": "silver_prod_order_status_all"
+                    },
+                    "schema": [],
+                    "connectionSettings": {
+                      "name": "Silver_Production_Lakehouse",
+                      "properties": {
+                        "type": "Lakehouse",
+                        "typeProperties": {
+                          "artifactId": "bfd65f24-2640-9f7f-4480-85b1ad99fdfa",
+                          "workspaceId": "00000000-0000-0000-0000-000000000000",
+                          "rootFolder": "Tables"
+                        },
+                        "externalReferences": {
+                          "connection": "b8242955-00ce-44ea-826a-3b65819cdf8d"
+                        },
+                        "annotations": []
+                      }
+                    },
+                    "annotations": []
+                  }
+                },
+                "translator": {
+                  "type": "TabularTranslator",
+                  "typeConversion": true,
+                  "typeConversionSettings": {
+                    "allowDataTruncation": true,
+                    "treatBooleanAsNumber": false
+                  }
+                },
+                "enableStaging": false
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Copy to Silver",
+              "dependsOn": [
+                {
+                  "activity": "Copy Silver Production Order Status All",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            }
+          ],
+          "ifFalseActivities": []
+        },
+        "name": "Check working hour or not",
+        "state": "Active",
+        "dependsOn": [
+          {
+            "activity": "SetCurrentTime",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      }
+    ],
+    "variables": {
+      "CurrentTime": {
+        "type": "String"
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Notebook",
+    "displayName": "Silver to Gold - Notebook 5 - Wax + Casting"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "92c8e389-8d48-9953-40aa-c71c4c13ef93"
+  }
+}

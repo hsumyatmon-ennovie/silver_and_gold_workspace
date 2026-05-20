@@ -1,0 +1,417 @@
+{
+  "properties": {
+    "jobMode": "Batch",
+    "source": {
+      "type": "LakehouseTable",
+      "connectionSettings": {
+        "type": "Lakehouse",
+        "typeProperties": {
+          "workspaceId": "17f91c34-23a9-4685-b7f6-2246823b5572",
+          "artifactId": "785307fd-af78-4359-969a-51c937ec834b",
+          "rootFolder": "Tables"
+        }
+      }
+    },
+    "destination": {
+      "type": "LakehouseTable",
+      "connectionSettings": {
+        "type": "Lakehouse",
+        "typeProperties": {
+          "workspaceId": "00000000-0000-0000-0000-000000000000",
+          "artifactId": "bfd65f24-2640-9f7f-4480-85b1ad99fdfa",
+          "rootFolder": "Tables"
+        }
+      }
+    },
+    "policy": {
+      "timeout": "0.12:00:00",
+      "retry": 0
+    }
+  },
+  "activities": [
+    {
+      "id": "9c4f540e-3370-4945-9b1d-8275be23345e",
+      "properties": {
+        "source": {
+          "datasetSettings": {
+            "table": "cr535_dsvcproductionorderstatus"
+          }
+        },
+        "destination": {
+          "partitionOption": "None",
+          "writeBehavior": "Overwrite",
+          "datasetSettings": {
+            "schema": "staging",
+            "table": "silver_prod_order_status_staging"
+          },
+          "applyVOrder": false
+        },
+        "enableStaging": false,
+        "translator": {
+          "type": "TabularTranslator",
+          "mappings": [
+            {
+              "source": {
+                "name": "SinkModifiedOn",
+                "type": "DateTime",
+                "physicalType": "timestamp"
+              },
+              "destination": {
+                "name": "SinkModifiedOn",
+                "physicalType": "timestamp"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_prodorderstatus",
+                "type": "Int64",
+                "physicalType": "long"
+              },
+              "destination": {
+                "name": "prod_order_status",
+                "physicalType": "long"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_type",
+                "type": "Int64",
+                "physicalType": "long"
+              },
+              "destination": {
+                "name": "type_name",
+                "physicalType": "long"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_open",
+                "type": "Boolean",
+                "physicalType": "boolean"
+              },
+              "destination": {
+                "name": "open",
+                "physicalType": "boolean"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_qaapproved",
+                "type": "Boolean",
+                "physicalType": "boolean"
+              },
+              "destination": {
+                "name": "qa_approved_name",
+                "physicalType": "boolean"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_rfidtransaction",
+                "type": "Boolean",
+                "physicalType": "boolean"
+              },
+              "destination": {
+                "name": "rfid_transaction_name",
+                "physicalType": "boolean"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_antennaid",
+                "type": "Int64",
+                "physicalType": "long"
+              },
+              "destination": {
+                "name": "antenna_id",
+                "physicalType": "long"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_datein",
+                "type": "DateTime",
+                "physicalType": "timestamp"
+              },
+              "destination": {
+                "name": "date_in",
+                "physicalType": "timestamp"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_dateout",
+                "type": "DateTime",
+                "physicalType": "timestamp"
+              },
+              "destination": {
+                "name": "date_out",
+                "physicalType": "timestamp"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_employeeno",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "employee_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_entrynoautono",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "entry_no_auto_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_itemno",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "item_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_jobsheetno",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "job_sheet_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_locationcode",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "current_location_code",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_machinecenterno",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "machine_center_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_operationno",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "operation_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_otherlocationcode",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "past_location_code",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_prodorderlineno",
+                "type": "Int64",
+                "physicalType": "long"
+              },
+              "destination": {
+                "name": "prod_order_line_no",
+                "physicalType": "long"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_prodorderno",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "prod_order_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_quantity",
+                "type": "Decimal",
+                "physicalType": "decimal",
+                "scale": 2,
+                "precision": 38
+              },
+              "destination": {
+                "name": "quantity",
+                "physicalType": "decimal",
+                "scale": 2,
+                "precision": 38
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_remainingquantity",
+                "type": "Decimal",
+                "physicalType": "decimal",
+                "scale": 2,
+                "precision": 38
+              },
+              "destination": {
+                "name": "remaining_quantity",
+                "physicalType": "decimal",
+                "scale": 2,
+                "precision": 38
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_rfidcode",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "rfid_code",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_salesorderno",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "sales_order_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_timein",
+                "type": "DateTime",
+                "physicalType": "timestamp"
+              },
+              "destination": {
+                "name": "time_in",
+                "physicalType": "timestamp"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_userid",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "user_id",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "createdon",
+                "type": "DateTime",
+                "physicalType": "timestamp"
+              },
+              "destination": {
+                "name": "created_on",
+                "physicalType": "timestamp"
+              }
+            },
+            {
+              "source": {
+                "name": "modifiedon",
+                "type": "DateTime",
+                "physicalType": "timestamp"
+              },
+              "destination": {
+                "name": "modified_on",
+                "physicalType": "timestamp"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_employeename",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "employee_name",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_runtime",
+                "type": "Decimal",
+                "physicalType": "decimal",
+                "scale": 2,
+                "precision": 38
+              },
+              "destination": {
+                "name": "runtime",
+                "physicalType": "decimal",
+                "scale": 2,
+                "precision": 38
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_cellno",
+                "type": "String",
+                "physicalType": "string"
+              },
+              "destination": {
+                "name": "cell_no",
+                "physicalType": "string"
+              }
+            },
+            {
+              "source": {
+                "name": "cr535_zone",
+                "type": "Int64",
+                "physicalType": "long"
+              },
+              "destination": {
+                "name": "zone",
+                "physicalType": "long"
+              }
+            }
+          ]
+        },
+        "typeConversionSettings": {
+          "typeConversion": {
+            "allowDataTruncation": true,
+            "treatBooleanAsNumber": false
+          }
+        }
+      }
+    }
+  ]
+}

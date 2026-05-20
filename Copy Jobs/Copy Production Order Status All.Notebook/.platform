@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Notebook",
+    "displayName": "Copy Production Order Status All"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "2474cffc-cde4-a69e-4d7a-5db8aed0dba8"
+  }
+}

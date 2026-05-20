@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "CopyJob",
+    "displayName": "Copy Production Order Status Staging"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "842c8b98-a39b-8cba-4b1d-77317a12e03e"
+  }
+}

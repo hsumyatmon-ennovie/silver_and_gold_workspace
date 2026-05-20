@@ -1,0 +1,183 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "type": "SetVariable",
+        "typeProperties": {
+          "variableName": "CurrentTime",
+          "value": {
+            "value": "@pipeline().TriggerTime",
+            "type": "Expression"
+          }
+        },
+        "policy": {
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "SetCurrentTime",
+        "state": "Active",
+        "dependsOn": []
+      },
+      {
+        "type": "IfCondition",
+        "typeProperties": {
+          "expression": {
+            "value": "@if(\n  or(\n      less(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 7),\n      greaterOrEquals(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 19)\n  ),\n  false,\n  true\n)",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "type": "RefreshDataflow",
+              "typeProperties": {
+                "dataflowId": "137ee70f-cf90-4d39-93e8-c0960b9b2710",
+                "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+                "notifyOption": "NoNotification",
+                "dataflowType": "Dataflow-Gen2"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Employee Time",
+              "dependsOn": []
+            },
+            {
+              "type": "RefreshDataflow",
+              "typeProperties": {
+                "dataflowId": "dd7e0f7a-d06b-461f-81d2-2a23b515a056",
+                "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+                "notifyOption": "NoNotification",
+                "dataflowType": "Dataflow-Gen2"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Employee Data",
+              "dependsOn": [
+                {
+                  "activity": "Employee Time",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "InvokeCopyJob",
+              "typeProperties": {
+                "copyJobId": "1158c992-ba94-4257-9a4f-1d3bbbccfac6",
+                "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a"
+              },
+              "externalReferences": {
+                "connection": "2d196602-f2bc-439b-bcfc-419191910d60"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Copy to Silver",
+              "dependsOn": [
+                {
+                  "activity": "Employee Data",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "TridentNotebook",
+              "typeProperties": {
+                "notebookId": "827c296f-5f70-8154-4caa-daa610528dd4",
+                "workspaceId": "00000000-0000-0000-0000-000000000000"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Clean and Transform",
+              "dependsOn": [
+                {
+                  "activity": "Copy to Silver",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "RefreshDataflow",
+              "typeProperties": {
+                "dataflowId": "8c831cd2-733a-4005-8b20-29736be80144",
+                "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+                "notifyOption": "NoNotification",
+                "dataflowType": "Dataflow-Gen2"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Sales Invoice Line",
+              "dependsOn": []
+            },
+            {
+              "type": "TridentNotebook",
+              "typeProperties": {
+                "notebookId": "d8d983bc-733f-b7f4-4b9c-aea7884fefb6",
+                "workspaceId": "00000000-0000-0000-0000-000000000000"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Notebook1",
+              "dependsOn": [
+                {
+                  "activity": "Clean and Transform",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            }
+          ],
+          "ifFalseActivities": []
+        },
+        "name": "Check working hour or not",
+        "state": "Active",
+        "dependsOn": [
+          {
+            "activity": "SetCurrentTime",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      }
+    ],
+    "variables": {
+      "CurrentTime": {
+        "type": "String"
+      }
+    }
+  }
+}

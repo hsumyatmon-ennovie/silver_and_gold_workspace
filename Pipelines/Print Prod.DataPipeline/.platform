@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "Print Prod"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "30cd3352-8c80-8ab8-42fd-7ccd58e0695b"
+  }
+}

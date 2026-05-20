@@ -1,0 +1,26 @@
+CREATE TABLE [prod].[silver_production_order] (
+
+	[versionnumber] varchar(50) NULL, 
+	[entity_id] varchar(200) NULL, 
+	[created_on] datetime2(6) NULL, 
+	[modified_on] datetime2(6) NULL, 
+	[prod_order_type] varchar(8000) NULL, 
+	[prod_order_no] varchar(8000) NULL, 
+	[prod_order_status] varchar(8000) NULL, 
+	[prod_order_description] varchar(8000) NULL, 
+	[FG_item_no] varchar(8000) NULL, 
+	[item_routing_no] varchar(8000) NULL, 
+	[item_material] varchar(8000) NULL, 
+	[prod_order_location] varchar(8000) NULL, 
+	[prod_order_quantity] decimal(18,2) NULL, 
+	[prod_order_cost_amount] decimal(18,2) NULL, 
+	[prod_order_starting_date_time] datetime2(6) NULL, 
+	[prod_order_ending_date_time] datetime2(6) NULL, 
+	[prod_order_due_date] datetime2(6) NULL, 
+	[prod_order_finished_date] datetime2(6) NULL, 
+	[sales_order_no] varchar(8000) NULL, 
+	[sales_order_line_no] bigint NULL, 
+	[ref_item] varchar(8000) NULL, 
+	[ref_prod_order] varchar(8000) NULL, 
+	[sink_modified_on] datetime2(6) NULL
+);

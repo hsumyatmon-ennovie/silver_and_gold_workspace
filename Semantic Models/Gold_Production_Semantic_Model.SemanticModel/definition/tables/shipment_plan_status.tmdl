@@ -1,0 +1,343 @@
+table shipment_plan_status
+	lineageTag: 8fd2d63a-b899-457c-8f31-e0f9ccc010c2
+	sourceLineageTag: [prod].[shipment_plan_status]
+
+	column 'Requested Week'
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: 27b9e971-695a-49d6-9944-d0bb9ff0ef7f
+		sourceLineageTag: Requested Week
+		summarizeBy: sum
+		sourceColumn: Requested Week
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Commit Week'
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: 69d2d885-fc33-4b21-b7e0-177c5f4dc267
+		sourceLineageTag: Commit Week
+		summarizeBy: sum
+		sourceColumn: Commit Week
+
+		annotation SummarizationSetBy = Automatic
+
+	column Line
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 9af2e61f-0673-424f-9018-bc7a91105b76
+		sourceLineageTag: Line
+		summarizeBy: none
+		sourceColumn: Line
+
+		annotation SummarizationSetBy = Automatic
+
+	column Cell
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 69e540ae-e6cc-4d1f-8bb5-1919cab208b4
+		sourceLineageTag: Cell
+		summarizeBy: none
+		sourceColumn: Cell
+
+		annotation SummarizationSetBy = Automatic
+
+	column Customer
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 9ce41751-39c7-4bf4-8d6d-7f30e643af2d
+		sourceLineageTag: Customer
+		summarizeBy: none
+		sourceColumn: Customer
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Status SO'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 9876d52e-e0bd-46de-9ee9-200812c8a7e9
+		sourceLineageTag: Status SO
+		summarizeBy: none
+		sourceColumn: Status SO
+
+		annotation SummarizationSetBy = Automatic
+
+	column SO
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: f86a6af7-569d-4f7b-89e3-44309636790e
+		sourceLineageTag: SO
+		summarizeBy: none
+		sourceColumn: SO
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'SO Line'
+		dataType: int64
+		formatString: 0
+		sourceProviderType: bigint
+		lineageTag: 8f1bdd9e-ea46-43b8-89df-1c1aba13b29c
+		sourceLineageTag: SO Line
+		summarizeBy: sum
+		sourceColumn: SO Line
+
+		annotation SummarizationSetBy = Automatic
+
+	column FG
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 8364e796-1207-444a-9b41-e23e8b21cef3
+		sourceLineageTag: FG
+		summarizeBy: none
+		sourceColumn: FG
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'FG Description'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 2529b810-e60a-495d-9f18-f09bfcdfe28e
+		sourceLineageTag: FG Description
+		summarizeBy: none
+		sourceColumn: FG Description
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'CS Team'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 0854971b-727f-47d2-bc3b-6373c26a9a30
+		sourceLineageTag: CS Team
+		summarizeBy: none
+		sourceColumn: CS Team
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'CS Noted'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: fe330983-be9f-40ec-9281-e626ed2735d5
+		sourceLineageTag: CS Noted
+		summarizeBy: none
+		sourceColumn: CS Noted
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'CS Document'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: dddd4d15-e359-4f9b-bfb4-829e91d4fc1d
+		sourceLineageTag: CS Document
+		summarizeBy: none
+		sourceColumn: CS Document
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'FG Type'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 9186c798-fd06-431e-84e6-6186f272ca5d
+		sourceLineageTag: FG Type
+		summarizeBy: none
+		sourceColumn: FG Type
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Total QTY'
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 5b03d3f3-5b56-43fe-8334-f73b5b908e32
+		sourceLineageTag: Total QTY
+		summarizeBy: sum
+		sourceColumn: Total QTY
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column 'Outstanding QTY'
+		dataType: decimal
+		formatString: \$#,0.###############;(\$#,0.###############);\$#,0.###############
+		sourceProviderType: decimal(18, 4)
+		lineageTag: c67985ff-04da-4255-a4e4-94f3751bd939
+		sourceLineageTag: Outstanding QTY
+		summarizeBy: sum
+		sourceColumn: Outstanding QTY
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"en-US"}
+
+	column Prod
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: b2cb183f-832c-4ba3-b2c9-83d9f3737494
+		sourceLineageTag: Prod
+		summarizeBy: none
+		sourceColumn: Prod
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Prod Due Date'
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime2
+		lineageTag: 9825b7e1-1d93-413f-b0bd-181cc566ff92
+		sourceLineageTag: Prod Due Date
+		summarizeBy: none
+		sourceColumn: Prod Due Date
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'FG Start Date'
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime2
+		lineageTag: a8e9ca26-adec-446c-a618-6ce055095efa
+		sourceLineageTag: FG Start Date
+		summarizeBy: none
+		sourceColumn: FG Start Date
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Casting Due Date'
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime2
+		lineageTag: 6dbce391-4fc5-4c98-9c8e-2e4b8b8430cd
+		sourceLineageTag: Casting Due Date
+		summarizeBy: none
+		sourceColumn: Casting Due Date
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Prod Line'
+		dataType: int64
+		formatString: 0
+		sourceProviderType: bigint
+		lineageTag: 9fab766f-77ba-47b5-a83c-c242706dd4e0
+		sourceLineageTag: Prod Line
+		summarizeBy: sum
+		sourceColumn: Prod Line
+
+		annotation SummarizationSetBy = Automatic
+
+	column Item
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 99bd091e-444f-4556-a165-0e48ab9b3d23
+		sourceLineageTag: Item
+		summarizeBy: none
+		sourceColumn: Item
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Item CAS'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 30433814-bc92-4824-a9a2-88fa6f07ae03
+		sourceLineageTag: Item CAS
+		summarizeBy: none
+		sourceColumn: Item CAS
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Prod Status'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 9615bb13-24e0-441e-a22e-8d0be5e7e382
+		sourceLineageTag: Prod Status
+		summarizeBy: none
+		sourceColumn: Prod Status
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Prod Qty'
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: e7d3210e-31c2-4358-8723-8b27e14b0d92
+		sourceLineageTag: Prod Qty
+		summarizeBy: sum
+		sourceColumn: Prod Qty
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column 'Prod Remaining QTY'
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 4a141d88-ddb3-4f04-af4e-dce70b5c0fa4
+		sourceLineageTag: Prod Remaining QTY
+		summarizeBy: sum
+		sourceColumn: Prod Remaining QTY
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column 'Prod Finished QTY'
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: a20b002d-37dc-4d95-bfc0-6148e5038c1a
+		sourceLineageTag: Prod Finished QTY
+		summarizeBy: sum
+		sourceColumn: Prod Finished QTY
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column 'Prod CAS'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 99822863-5741-4fdb-8830-b4dacaca44ad
+		sourceLineageTag: Prod CAS
+		summarizeBy: none
+		sourceColumn: Prod CAS
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'CAS Tree'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 8e434bc0-1daa-4e02-aa9e-c0f6ac486900
+		sourceLineageTag: CAS Tree
+		summarizeBy: none
+		sourceColumn: CAS Tree
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'CAS Qty'
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 826b95fb-90c2-4582-9021-fc506b5fcaa4
+		sourceLineageTag: CAS Qty
+		summarizeBy: sum
+		sourceColumn: CAS Qty
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column 'CAS Status'
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: a9eb9d69-ce23-4c11-a0c0-0fbcc70dc832
+		sourceLineageTag: CAS Status
+		summarizeBy: none
+		sourceColumn: CAS Status
+
+		annotation SummarizationSetBy = Automatic
+
+	partition shipment_plan_status = entity
+		mode: directLake
+		source
+			entityName: shipment_plan_status
+			schemaName: prod
+			expressionSource: DatabaseQuery
+
+	annotation PBI_ResultType = Table
+

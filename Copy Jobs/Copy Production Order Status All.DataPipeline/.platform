@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "Copy Production Order Status All"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "0543e7c2-feec-9876-4bc4-0951fc6f1338"
+  }
+}

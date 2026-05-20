@@ -1,0 +1,66 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "type": "SetVariable",
+        "typeProperties": {
+          "variableName": "CurrentTime",
+          "value": {
+            "value": "@pipeline().TriggerTime",
+            "type": "Expression"
+          }
+        },
+        "policy": {
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "SetCurrentTime",
+        "state": "Active",
+        "dependsOn": []
+      },
+      {
+        "type": "IfCondition",
+        "typeProperties": {
+          "expression": {
+            "value": "@if(\n  or(\n    or(\n      less(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 7),\n      greaterOrEquals(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 19)\n    ),\n    or(\n      equals(dayOfWeek(addHours(utcNow(), 7)), 0),\n      equals(dayOfWeek(addHours(utcNow(), 7)), 6)\n    )\n  ),\n  false,\n  true\n)\n",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "type": "TridentNotebook",
+              "typeProperties": {
+                "notebookId": "3f5cf4c3-6a94-93a7-43fe-460ab30d889d",
+                "workspaceId": "00000000-0000-0000-0000-000000000000"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Sync Once an Hour",
+              "dependsOn": []
+            }
+          ],
+          "ifFalseActivities": []
+        },
+        "name": "Check working hour or not",
+        "state": "Active",
+        "dependsOn": [
+          {
+            "activity": "SetCurrentTime",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      }
+    ],
+    "variables": {
+      "CurrentTime": {
+        "type": "string"
+      }
+    }
+  }
+}
