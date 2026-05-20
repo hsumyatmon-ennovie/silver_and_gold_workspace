@@ -1164,6 +1164,7 @@ SOURCE_FIRM   = "Silver_Production_Lakehouse.prod.silver_firm_plan_log"
 
 # CHANGE: use BC mirror Production Order instead of silver_prod_order_header
 SOURCE_HEADER = "Silver_BC_Lakehouse.bc.`Production Order`"
+PLANNING_OPERATION_DUE = "Gold_Production_Lakehouse.prod.planning_operation_due"
 
 TARGET_TABLE  = "Gold_Production_Lakehouse.prod.gold_compare_plan_vs_actual"
 
@@ -1175,6 +1176,20 @@ header_df = spark.table(SOURCE_HEADER)
 
 # Ensure date types
 firm_df = firm_df.withColumn("finish_date", F.to_date("finish_date"))
+
+# Planned due dates from engine, latest run per (prod_order_no, prod_order_line_no)
+pod_w = Window.partitionBy("prod_order_no", "prod_order_line_no").orderBy(F.col("engine_run_ts").desc())
+pod_df = (
+    spark.table(PLANNING_OPERATION_DUE)
+    .select(
+        "prod_order_no", "prod_order_line_no",
+        F.col("prod_order_due_date").alias("planned_prod_order_due_date"),
+        "engine_run_ts",
+    )
+    .withColumn("_rn", F.row_number().over(pod_w))
+    .filter(F.col("_rn") == 1)
+    .drop("_rn", "engine_run_ts")
+)
 
 # BC mirror columns have spaces/dots -> select + rename safely
 header_df = (
@@ -1199,6 +1214,12 @@ joined_df = (
         (F.col("F.item_no")       == F.col("H.FG_item_no")),
         "inner"
     )
+    .join(
+        pod_df.alias("P"),
+        (F.col("F.prod_order_no")      == F.col("P.prod_order_no")) &
+        (F.col("F.prod_order_line_no") == F.col("P.prod_order_line_no")),
+        "left"
+    )
 )
 
 # -------------------------------------------------------------------
@@ -1219,7 +1240,10 @@ base_df = (
         F.col("F.quantity").alias("quantity"),
         F.col("F.remark").alias("remark"),
         F.col("F.finish_date").alias("finish_date"),
-        F.col("H.prod_order_due_date").alias("cur_due")
+        F.coalesce(
+            F.col("P.planned_prod_order_due_date"),
+            F.col("H.prod_order_due_date"),
+        ).alias("cur_due"),
     )
     .distinct()
 )
@@ -1281,12 +1305,14 @@ print("Full refresh of gold_compare_plan_vs_actual completed.")
 # CELL ********************
 
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
 # -------------------------------------------------------------------
 # Config
 # -------------------------------------------------------------------
 SOURCE_TABLE = "Silver_Production_Lakehouse.prod.silver_loading_capacity"
 TARGET_TABLE = "Gold_Production_Lakehouse.prod.gold_loading_capacity"
+PLANNING_OPERATION_DUE = "Gold_Production_Lakehouse.prod.planning_operation_due"
 
 # -------------------------------------------------------------------
 # Helper: add 7 hours and cast to date
@@ -1303,6 +1329,30 @@ def add_7h_to_date(col_name: str):
 # Load source
 # -------------------------------------------------------------------
 src = spark.table(SOURCE_TABLE)
+
+# Override prod_order_due_date with the engine-anchored value from
+# planning_operation_due (latest engine_run per prod_order_no/line),
+# falling back to the silver value when planning has no matching row.
+_pod_w = Window.partitionBy("prod_order_no", "prod_order_line_no").orderBy(F.col("engine_run_ts").desc())
+_pod_df = (
+    spark.table(PLANNING_OPERATION_DUE)
+    .select(
+        "prod_order_no", "prod_order_line_no",
+        F.col("prod_order_due_date").alias("planned_prod_order_due_date"),
+        "engine_run_ts",
+    )
+    .withColumn("_rn", F.row_number().over(_pod_w))
+    .filter(F.col("_rn") == 1)
+    .drop("_rn", "engine_run_ts")
+)
+src = (
+    src.join(_pod_df, ["prod_order_no", "prod_order_line_no"], "left")
+       .withColumn(
+           "prod_order_due_date",
+           F.coalesce(F.col("planned_prod_order_due_date"), F.col("prod_order_due_date")),
+       )
+       .drop("planned_prod_order_due_date")
+)
 
 # -------------------------------------------------------------------
 # Transform (FULL FIXED VERSION)
