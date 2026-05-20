@@ -1,0 +1,44 @@
+[
+  {
+    "uniqueIdentifier": "33ed3183-a78d-4584-b55a-a84362f473d4",
+    "payload": {
+      "name": "RealTimeHub",
+      "connection": {
+        "scope": "Artifact",
+        "tenantId": "6ef05708-d7fa-448e-a529-c4e47e6fa6d9",
+        "workspaceId": "d74457b3-045c-445d-82c6-9a2e4b9f1436",
+        "artifactId": "eb6cf806-c44c-4388-b7d2-5b45af0c4f12",
+        "eventGroupType": "Microsoft.Fabric.JobEvents"
+      },
+      "filterSettings": {
+        "eventTypes": [
+          {
+            "name": "Microsoft.Fabric.JobEvents.ItemJobCreated"
+          },
+          {
+            "name": "Microsoft.Fabric.JobEvents.ItemJobStatusChanged"
+          },
+          {
+            "name": "Microsoft.Fabric.JobEvents.ItemJobSucceeded"
+          },
+          {
+            "name": "Microsoft.Fabric.JobEvents.ItemJobFailed"
+          }
+        ],
+        "filters": []
+      }
+    },
+    "type": "realTimeHubSource-v1"
+  },
+  {
+    "uniqueIdentifier": "c7562ece-9761-4efc-98f9-218ac88f4e7b",
+    "payload": {
+      "name": "JobEvents event",
+      "definition": {
+        "type": "Event",
+        "instance": "{\"templateId\":\"SourceEvent\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"SourceEventStep\",\"id\":\"917d3e49-d3ab-48cd-b075-0a5c8582bfe5\",\"rows\":[{\"name\":\"SourceSelector\",\"kind\":\"SourceReference\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"33ed3183-a78d-4584-b55a-a84362f473d4\"}]}]}]}"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  }
+]

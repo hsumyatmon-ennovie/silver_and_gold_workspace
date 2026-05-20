@@ -1,0 +1,4 @@
+relationship 85045185-5042-0a8c-9007-f08df9358f5b
+	fromColumn: gold_npd_skt_prod.เลข_SKT
+	toColumn: gold_cad_requests.sketch_number
+

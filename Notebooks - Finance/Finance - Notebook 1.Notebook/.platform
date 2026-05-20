@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Notebook",
+    "displayName": "Finance - Notebook 1"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "b79dc052-88a0-8f2d-4c59-1cf452df628f"
+  }
+}

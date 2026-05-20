@@ -1,0 +1,25 @@
+CREATE TABLE [cx].[silver_customers] (
+
+	[versionnumber] varchar(50) NULL, 
+	[entity_id] varchar(200) NULL, 
+	[created_on] datetime2(6) NULL, 
+	[modified_on] datetime2(6) NULL, 
+	[customer_no] varchar(8000) NULL, 
+	[customer_name] varchar(8000) NULL, 
+	[customer_location] varchar(8000) NULL, 
+	[customer_cad_std_time] bigint NULL, 
+	[customer_master_std_time] bigint NULL, 
+	[customer_sample_std_time] bigint NULL, 
+	[customer_abbreviation] varchar(8000) NULL, 
+	[cs_team] varchar(8000) NULL, 
+	[cad_manager_team] varchar(8000) NULL, 
+	[customer_address] varchar(8000) NULL, 
+	[customer_address2] varchar(8000) NULL, 
+	[customer_city] varchar(8000) NULL, 
+	[customer_country] varchar(8000) NULL, 
+	[customer_phone] varchar(8000) NULL, 
+	[customer_moblie_phone] varchar(8000) NULL, 
+	[customer_contact] varchar(8000) NULL, 
+	[customer_email] varchar(8000) NULL, 
+	[sink_modified_on] datetime2(6) NULL
+);

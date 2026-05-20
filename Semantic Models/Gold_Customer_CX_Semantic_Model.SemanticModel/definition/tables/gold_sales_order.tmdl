@@ -1,0 +1,442 @@
+table gold_sales_order
+	lineageTag: 1fb4d08c-8bf9-4087-b76f-1e480ce6e3c7
+	sourceLineageTag: [cx].[gold_sales_order]
+
+	column SalesorderNo
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 02cb2d07-f7f5-4dac-b896-94ff27e784ca
+		sourceLineageTag: SalesorderNo
+		summarizeBy: none
+		sourceColumn: SalesorderNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column CusNo
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 38a835d7-7c01-4a54-9526-d7ee19a69d3e
+		sourceLineageTag: CusNo
+		summarizeBy: none
+		sourceColumn: CusNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column CusName
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 345de337-3665-481d-8e6c-44aef2c0c33a
+		sourceLineageTag: CusName
+		summarizeBy: none
+		sourceColumn: CusName
+
+		annotation SummarizationSetBy = Automatic
+
+	column StatusSO
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 3901516b-c4e3-462d-a4db-63449c5ff060
+		sourceLineageTag: StatusSO
+		summarizeBy: none
+		sourceColumn: StatusSO
+
+		annotation SummarizationSetBy = Automatic
+
+	column DocDate
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 877e24de-b9aa-4aad-8380-2de128d1400d
+		sourceLineageTag: DocDate
+		summarizeBy: none
+		sourceColumn: DocDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column PostDate
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 7da7e824-05bc-441e-889e-906b4895ddca
+		sourceLineageTag: PostDate
+		summarizeBy: none
+		sourceColumn: PostDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column OrderDate
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 11adf473-2e1b-49bf-a9a2-a1008a8f096b
+		sourceLineageTag: OrderDate
+		summarizeBy: none
+		sourceColumn: OrderDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column DueDate
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 945a41c4-5705-461a-bb20-0e6b9b3751db
+		sourceLineageTag: DueDate
+		summarizeBy: none
+		sourceColumn: DueDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column ReqDate
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 9b410c66-be55-4e78-bd04-b8d5a8dedf31
+		sourceLineageTag: ReqDate
+		summarizeBy: none
+		sourceColumn: ReqDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column PmDate
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 0d0801c9-29d0-47f2-94fe-d7d2c7552ad8
+		sourceLineageTag: PmDate
+		summarizeBy: none
+		sourceColumn: PmDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column ShipDate
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 30ca2c54-f36c-4df0-b9ea-cb1f49defef0
+		sourceLineageTag: ShipDate
+		summarizeBy: none
+		sourceColumn: ShipDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column CSNoted
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: f29cb3a7-ecf4-43dc-853f-ce5e8e41d4cb
+		sourceLineageTag: CSNoted
+		summarizeBy: none
+		sourceColumn: CSNoted
+
+		annotation SummarizationSetBy = Automatic
+
+	column CSteam
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: bace8d26-f1ea-4e7a-9698-2698635bf377
+		sourceLineageTag: CSteam
+		summarizeBy: none
+		sourceColumn: CSteam
+
+		annotation SummarizationSetBy = Automatic
+
+	column Currency
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: f81cdfda-aa55-4e93-afb5-9ad60946760d
+		sourceLineageTag: Currency
+		summarizeBy: none
+		sourceColumn: Currency
+
+		annotation SummarizationSetBy = Automatic
+
+	column ShiptoName
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 75ff1396-375a-46e8-88fb-59c2dff93990
+		sourceLineageTag: ShiptoName
+		summarizeBy: none
+		sourceColumn: ShiptoName
+
+		annotation SummarizationSetBy = Automatic
+
+	column BilltoName
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 293f1521-1a86-4da7-a1a5-d5d60686a552
+		sourceLineageTag: BilltoName
+		summarizeBy: none
+		sourceColumn: BilltoName
+
+		annotation SummarizationSetBy = Automatic
+
+	column LOCATION
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 7aba0307-6dc8-4107-a3b7-4c0be2e8b4ea
+		sourceLineageTag: LOCATION
+		summarizeBy: none
+		sourceColumn: LOCATION
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order_external_document
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: a62effdb-4b43-44f3-953f-bb0fa9d26ddb
+		sourceLineageTag: sales_order_external_document
+		summarizeBy: none
+		sourceColumn: sales_order_external_document
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order_released_date
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: d85f1f1c-51d4-4db7-b3bf-7ce584701e1f
+		sourceLineageTag: sales_order_released_date
+		summarizeBy: none
+		sourceColumn: sales_order_released_date
+
+		annotation SummarizationSetBy = Automatic
+
+	column ShipmentWeek
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: d4c58dbb-e57b-4b77-8ee5-4850922f40f8
+		sourceLineageTag: ShipmentWeek
+		summarizeBy: sum
+		sourceColumn: ShipmentWeek
+
+		annotation SummarizationSetBy = Automatic
+
+	column LineNo
+		dataType: int64
+		formatString: 0
+		sourceProviderType: bigint
+		lineageTag: 8ab4e906-75c5-4076-a416-d0e48981ee77
+		sourceLineageTag: LineNo
+		summarizeBy: sum
+		sourceColumn: LineNo
+
+		annotation SummarizationSetBy = Automatic
+
+	column ItemFG
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 6cccfe4c-dd4f-4847-9018-ed44dd8b5bf7
+		sourceLineageTag: ItemFG
+		summarizeBy: none
+		sourceColumn: ItemFG
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_description
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: a830100e-2885-4ecd-bf67-1d3f6cd66caa
+		sourceLineageTag: item_description
+		summarizeBy: none
+		sourceColumn: item_description
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_posting_group
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 48bdd3c6-3828-4029-9ed4-d13e05da5b69
+		sourceLineageTag: item_posting_group
+		summarizeBy: none
+		sourceColumn: item_posting_group
+
+		annotation SummarizationSetBy = Automatic
+
+	column LineLocation
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 7de5ce5e-830a-43b6-b69e-026f6838e49f
+		sourceLineageTag: LineLocation
+		summarizeBy: none
+		sourceColumn: LineLocation
+
+		annotation SummarizationSetBy = Automatic
+
+	column Itemgroup
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 07876b52-d860-48ac-9052-20ccac37841f
+		sourceLineageTag: Itemgroup
+		summarizeBy: none
+		sourceColumn: Itemgroup
+
+		annotation SummarizationSetBy = Automatic
+
+	column QTY
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: e1584338-35d7-4f31-bb2d-6e97e96b1a55
+		sourceLineageTag: QTY
+		summarizeBy: sum
+		sourceColumn: QTY
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column UOM
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 92ab2103-c698-40b5-929c-2b49c83db99e
+		sourceLineageTag: UOM
+		summarizeBy: none
+		sourceColumn: UOM
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_unit_cost
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: fea7132b-3436-4868-be23-f642c94279db
+		sourceLineageTag: item_unit_cost
+		summarizeBy: sum
+		sourceColumn: item_unit_cost
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column UnitPrice
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 182110ee-9643-4896-b349-3bff770e85c2
+		sourceLineageTag: UnitPrice
+		summarizeBy: sum
+		sourceColumn: UnitPrice
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column item_quantity_to_ship
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 7ecc7612-0018-4c96-942d-24edd5c0d532
+		sourceLineageTag: item_quantity_to_ship
+		summarizeBy: sum
+		sourceColumn: item_quantity_to_ship
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column QtyShip
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 16e23927-7c92-4e87-b23a-3790e594a0c2
+		sourceLineageTag: QtyShip
+		summarizeBy: sum
+		sourceColumn: QtyShip
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column item_quantity_to_invoice
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 6f39fbaf-9ab7-41ee-baf6-108105d7f294
+		sourceLineageTag: item_quantity_to_invoice
+		summarizeBy: sum
+		sourceColumn: item_quantity_to_invoice
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column QtyINV
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: af469fef-cd08-4ee9-888f-f22d9158c16f
+		sourceLineageTag: QtyINV
+		summarizeBy: sum
+		sourceColumn: QtyINV
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column sales_line_requested_date
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: a05fb69c-51f7-459e-9500-d43cb798e99a
+		sourceLineageTag: sales_line_requested_date
+		summarizeBy: none
+		sourceColumn: sales_line_requested_date
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_line_promised_date
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 634b984e-443c-46aa-ad54-f1bea2ed50f8
+		sourceLineageTag: sales_line_promised_date
+		summarizeBy: none
+		sourceColumn: sales_line_promised_date
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_line_plan_delivery
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: d4bcd874-2ff4-417a-8442-71b56f3c55ae
+		sourceLineageTag: sales_line_plan_delivery
+		summarizeBy: none
+		sourceColumn: sales_line_plan_delivery
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_line_plan_shipment
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: ec6c4393-35cd-4c9c-8573-9bd511de152a
+		sourceLineageTag: sales_line_plan_shipment
+		summarizeBy: none
+		sourceColumn: sales_line_plan_shipment
+
+		annotation SummarizationSetBy = Automatic
+
+	column LineShipmentDate
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 9c6d9673-6346-40f5-9a01-28cd608ff66d
+		sourceLineageTag: LineShipmentDate
+		summarizeBy: none
+		sourceColumn: LineShipmentDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column TypeofFG
+		dataType: string
+		sourceProviderType: varchar(8000)
+		lineageTag: 38e9dd20-d92e-422c-8e22-578827d6b34b
+		sourceLineageTag: TypeofFG
+		summarizeBy: none
+		sourceColumn: TypeofFG
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_sales_order = entity
+		mode: directLake
+		source
+			entityName: gold_sales_order
+			schemaName: cx
+			expressionSource: DatabaseQuery
+
+	annotation PBI_ResultType = Table
+

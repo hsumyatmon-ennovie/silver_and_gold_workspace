@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "Invoke Sales + Prod Dev Pipeline"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "f535f673-cf1a-91c4-4732-af643b19c576"
+  }
+}

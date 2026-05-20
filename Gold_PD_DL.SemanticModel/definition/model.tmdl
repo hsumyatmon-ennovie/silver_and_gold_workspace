@@ -1,0 +1,26 @@
+model Model
+	culture: en-US
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: en-US
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation PBI_QueryOrder = ["DirectLake - Gold_Product_Dev_Lakehouse"]
+
+annotation __PBI_TimeIntelligenceEnabled = 1
+
+annotation PBI_ProTooling = ["DirectLakeOnOneLakeInWeb","WebModelingEdit"]
+
+ref table gold_npd_engineer_time_log
+ref table gold_npd_sales_inv_head_line
+ref table gold_cad_requests
+ref table gold_npd_last_step_3
+ref table gold_step_master_final
+ref table gold_step_name
+ref table gold_npd_sketch_mapping
+ref table gold_npd_prod_status
+ref table gold_npd_skt_inv
+ref table gold_npd_skt_prod
+ref table gold_npd_so_inv
+

@@ -1,0 +1,320 @@
+table gold_cad_requests
+	lineageTag: 387d30a5-5552-4641-85b9-6b36445a6e65
+	sourceLineageTag: [pd].[gold_cad_requests]
+
+	column created_on
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: de10b245-29d8-4b5c-bccd-aaba580954f7
+		sourceLineageTag: created_on
+		summarizeBy: none
+		sourceColumn: created_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column modified_on
+		dataType: string
+		lineageTag: de5e4970-0b19-4084-86d9-f4d68dfcfd79
+		sourceLineageTag: modified_on
+		summarizeBy: none
+		sourceColumn: modified_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column sketch_number
+		dataType: string
+		lineageTag: fb4e7a28-eff7-458d-9a1d-68ada0ddebbd
+		sourceLineageTag: sketch_number
+		summarizeBy: none
+		sourceColumn: sketch_number
+
+		annotation SummarizationSetBy = Automatic
+
+	column qty_skt
+		dataType: int64
+		formatString: 0
+		lineageTag: 0e657a94-9565-4bb0-93f4-e03e0e3543e9
+		sourceLineageTag: qty_skt
+		summarizeBy: none
+		sourceColumn: qty_skt
+
+		annotation SummarizationSetBy = Automatic
+
+	column priority
+		dataType: string
+		lineageTag: aee04791-c877-44cc-8b04-90f532b4194b
+		sourceLineageTag: priority
+		summarizeBy: none
+		sourceColumn: priority
+
+		annotation SummarizationSetBy = Automatic
+
+	column priority_name
+		dataType: string
+		lineageTag: 79b198f4-9817-4b19-956a-ce3dc4af5d89
+		sourceLineageTag: priority_name
+		summarizeBy: none
+		sourceColumn: priority_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column submission_date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 17405eec-8460-498c-b72e-95034e1a2259
+		sourceLineageTag: submission_date
+		summarizeBy: none
+		sourceColumn: submission_date
+
+		annotation SummarizationSetBy = Automatic
+
+	column customer_request_date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 49cfde7d-da9e-429b-bf0d-a3c56e4875e2
+		sourceLineageTag: customer_request_date
+		summarizeBy: none
+		sourceColumn: customer_request_date
+
+		annotation SummarizationSetBy = Automatic
+
+	column cus_req
+		dataType: int64
+		formatString: 0
+		lineageTag: 49f8e2be-832f-4159-8083-dfd3bf7ee596
+		sourceLineageTag: cus_req
+		summarizeBy: none
+		sourceColumn: cus_req
+
+		annotation SummarizationSetBy = Automatic
+
+	column cus_week
+		dataType: int64
+		formatString: 0
+		lineageTag: a07b3b92-ed94-4716-855e-d8132d8285ed
+		sourceLineageTag: cus_week
+		summarizeBy: none
+		sourceColumn: cus_week
+
+		annotation SummarizationSetBy = Automatic
+
+	column cad_week
+		dataType: int64
+		formatString: 0
+		lineageTag: 51aede48-8042-4714-8ae1-1d5774873152
+		sourceLineageTag: cad_week
+		summarizeBy: none
+		sourceColumn: cad_week
+
+		annotation SummarizationSetBy = Automatic
+
+	column cropped_design_image_url
+		dataType: string
+		lineageTag: 0baa7de2-6123-4c0e-9ad7-e2b98934ceb3
+		sourceLineageTag: cropped_design_image_url
+		summarizeBy: none
+		sourceColumn: cropped_design_image_url
+
+		annotation SummarizationSetBy = Automatic
+
+	column status_name
+		dataType: string
+		lineageTag: db215aab-dbe9-494f-80af-725d2a37fbc8
+		sourceLineageTag: status_name
+		summarizeBy: none
+		sourceColumn: status_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column collection_id_name
+		dataType: string
+		lineageTag: 52a21a1d-c956-4409-82b9-c403505a0e67
+		sourceLineageTag: collection_id_name
+		summarizeBy: none
+		sourceColumn: collection_id_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column customer_name
+		dataType: string
+		lineageTag: 3d269f27-c500-4865-b8e1-38b4f7d1711a
+		sourceLineageTag: customer_name
+		summarizeBy: none
+		sourceColumn: customer_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column committed_week
+		dataType: string
+		lineageTag: 329bc60f-1c3f-4125-9141-3fe7bf7cc804
+		sourceLineageTag: committed_week
+		summarizeBy: none
+		sourceColumn: committed_week
+
+		annotation SummarizationSetBy = Automatic
+
+	column customer_design_number
+		dataType: string
+		lineageTag: 1c04957f-1522-42fb-ad11-dc41f799ea71
+		sourceLineageTag: customer_design_number
+		summarizeBy: none
+		sourceColumn: customer_design_number
+
+		annotation SummarizationSetBy = Automatic
+
+	column reopen_sketch_number
+		dataType: string
+		lineageTag: ae021292-fc03-4b58-8fe8-85d9416c2c18
+		sourceLineageTag: reopen_sketch_number
+		summarizeBy: none
+		sourceColumn: reopen_sketch_number
+
+		annotation SummarizationSetBy = Automatic
+
+	column comments
+		dataType: string
+		lineageTag: 1a73b396-65bc-4134-95b4-ad1360be97c7
+		sourceLineageTag: comments
+		summarizeBy: none
+		sourceColumn: comments
+
+		annotation SummarizationSetBy = Automatic
+
+	column additional_photo_url
+		dataType: string
+		lineageTag: ade0b372-d1b6-47c0-9fdf-c7a4a765033c
+		sourceLineageTag: additional_photo_url
+		summarizeBy: none
+		sourceColumn: additional_photo_url
+
+		annotation SummarizationSetBy = Automatic
+
+	column is_archive_name
+		dataType: string
+		lineageTag: 6ed38373-edff-43fd-a828-b3d0f09d87c2
+		sourceLineageTag: is_archive_name
+		summarizeBy: none
+		sourceColumn: is_archive_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column created_by_email
+		dataType: string
+		lineageTag: 690120a0-7031-4617-ab07-4fe31204a930
+		sourceLineageTag: created_by_email
+		summarizeBy: none
+		sourceColumn: created_by_email
+
+		annotation SummarizationSetBy = Automatic
+
+	column status_description
+		dataType: string
+		lineageTag: 348eab77-7e4d-4e52-a714-798ccd6d1030
+		sourceLineageTag: status_description
+		summarizeBy: none
+		sourceColumn: status_description
+
+		annotation SummarizationSetBy = Automatic
+
+	column assigned_engineer_name
+		dataType: string
+		lineageTag: 95103773-33d0-448b-a9b6-20f2cc3825d3
+		sourceLineageTag: assigned_engineer_name
+		summarizeBy: none
+		sourceColumn: assigned_engineer_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column promised_date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: b66189d1-7b40-40df-b2d8-a5b40272fc9e
+		sourceLineageTag: promised_date
+		summarizeBy: none
+		sourceColumn: promised_date
+
+		annotation SummarizationSetBy = Automatic
+
+	column pro_req
+		dataType: int64
+		formatString: 0
+		lineageTag: bd7c779c-86fe-49d0-ae11-2ca1469dc126
+		sourceLineageTag: pro_req
+		summarizeBy: none
+		sourceColumn: pro_req
+
+		annotation SummarizationSetBy = Automatic
+
+	column description
+		dataType: string
+		lineageTag: 7604126c-7f96-45a2-b692-cbafc129a426
+		sourceLineageTag: description
+		summarizeBy: none
+		sourceColumn: description
+
+		annotation SummarizationSetBy = Automatic
+
+	column status
+		dataType: string
+		lineageTag: f66fa514-0852-43d7-9e50-227672344688
+		sourceLineageTag: status
+		summarizeBy: none
+		sourceColumn: status
+
+		annotation SummarizationSetBy = Automatic
+
+	column estimated_development_time
+		dataType: decimal
+		formatString: "£"#,0.###############;-"£"#,0.###############;"£"#,0.###############
+		lineageTag: 6e72f66d-2af6-41fa-b088-d37c3843386c
+		sourceLineageTag: estimated_development_time
+		summarizeBy: none
+		sourceColumn: estimated_development_time
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"en-GB"}
+
+	column estimated_production_ready_time
+		dataType: decimal
+		formatString: "£"#,0.###############;-"£"#,0.###############;"£"#,0.###############
+		lineageTag: f4bc2f25-f00e-4ef7-8cbd-888c1a73cbdd
+		sourceLineageTag: estimated_production_ready_time
+		summarizeBy: none
+		sourceColumn: estimated_production_ready_time
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"en-GB"}
+
+	column customer_target_price
+		dataType: decimal
+		formatString: "£"#,0.###############;-"£"#,0.###############;"£"#,0.###############
+		lineageTag: 56b2f8ff-b2f3-4416-b7c3-a7e3b7fb50e3
+		sourceLineageTag: customer_target_price
+		summarizeBy: none
+		sourceColumn: customer_target_price
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"en-GB"}
+
+	column target_customer_price
+		dataType: decimal
+		formatString: "£"#,0.###############;-"£"#,0.###############;"£"#,0.###############
+		lineageTag: e7c0ef7c-ed33-4f06-bc58-9c73f2175ba3
+		sourceLineageTag: target_customer_price
+		summarizeBy: none
+		sourceColumn: target_customer_price
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"en-GB"}
+
+	partition gold_cad_requests = entity
+		mode: directLake
+		source
+			entityName: gold_cad_requests
+			schemaName: pd
+			expressionSource: 'DirectLake - Gold_Product_Dev_Lakehouse'
+

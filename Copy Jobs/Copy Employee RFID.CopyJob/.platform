@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "CopyJob",
+    "displayName": "Copy Employee RFID"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "648e9db6-bcbe-ba26-41f9-d0c8985aafa6"
+  }
+}

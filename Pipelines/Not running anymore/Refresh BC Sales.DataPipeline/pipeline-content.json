@@ -1,0 +1,49 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "name": "Sales Order",
+        "type": "RefreshDataflow",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "dataflowId": "7209c82e-2134-4c21-98f8-f3a84b498dda",
+          "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+          "notifyOption": "NoNotification",
+          "dataflowType": "Dataflow-Gen2"
+        }
+      },
+      {
+        "name": "Sales Line",
+        "type": "RefreshDataflow",
+        "dependsOn": [
+          {
+            "activity": "Sales Order",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "dataflowId": "498f4e57-0547-404b-ba3e-826b160929a2",
+          "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+          "notifyOption": "NoNotification",
+          "dataflowType": "Dataflow-Gen2"
+        }
+      }
+    ]
+  }
+}

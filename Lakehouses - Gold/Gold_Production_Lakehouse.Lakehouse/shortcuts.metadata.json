@@ -1,0 +1,74 @@
+[
+  {
+    "name": "planning_operation_due",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/staging/planning_operation_due",
+        "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
+        "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
+      }
+    }
+  },
+  {
+    "name": "planning_forward_schedule",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/staging/planning_forward_schedule",
+        "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
+        "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
+      }
+    }
+  },
+  {
+    "name": "planning_forward_schedule",
+    "path": "/Tables/planning",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/staging/planning_forward_schedule",
+        "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
+        "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
+      }
+    }
+  },
+  {
+    "name": "planning_forward_schedule",
+    "path": "/Tables/delta",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/staging/planning_forward_schedule",
+        "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
+        "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
+      }
+    }
+  },
+  {
+    "name": "gold_delta_from_emp_time_summary",
+    "path": "/Tables/delta",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/prod/gold_from_emp_time_summary",
+        "itemId": "00000000-0000-0000-0000-000000000000",
+        "workspaceId": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  },
+  {
+    "name": "gold_delta_actual_time_by_employees",
+    "path": "/Tables/delta",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/prod/gold_prod_actual_time_by_employees",
+        "itemId": "00000000-0000-0000-0000-000000000000",
+        "workspaceId": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  }
+]

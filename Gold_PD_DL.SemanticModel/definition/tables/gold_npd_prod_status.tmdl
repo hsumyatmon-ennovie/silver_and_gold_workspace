@@ -1,0 +1,180 @@
+table gold_npd_prod_status
+	lineageTag: 5037ab9e-60ac-4c17-beb2-405d5d50d036
+	sourceLineageTag: [pd].[gold_npd_prod_status]
+
+	column created_on
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: a853fcbb-3fd2-4c1d-8837-7a2eea9c69df
+		sourceLineageTag: created_on
+		summarizeBy: none
+		sourceColumn: created_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column modified_on
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 6a215f98-9c24-4384-be1b-71febe7e0cb6
+		sourceLineageTag: modified_on
+		summarizeBy: none
+		sourceColumn: modified_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column type_name
+		dataType: string
+		lineageTag: ab850ec1-3412-48d4-83cf-2b1e4b6422a5
+		sourceLineageTag: type_name
+		summarizeBy: none
+		sourceColumn: type_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column open
+		dataType: string
+		lineageTag: 73926c93-3535-46fa-b1ff-5bcd5a5ac385
+		sourceLineageTag: open
+		summarizeBy: none
+		sourceColumn: open
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_line_no
+		dataType: int64
+		formatString: 0
+		lineageTag: 84b6fdef-8e18-418d-a3b2-e800a4556758
+		sourceLineageTag: prod_order_line_no
+		summarizeBy: sum
+		sourceColumn: prod_order_line_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order_no
+		dataType: string
+		lineageTag: 7d69f32a-55ca-46f1-b629-1cc1eed10812
+		sourceLineageTag: sales_order_no
+		summarizeBy: none
+		sourceColumn: sales_order_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column current_location_code
+		dataType: string
+		lineageTag: bd157e7a-d1a9-4854-8e45-8e1c60e59087
+		sourceLineageTag: current_location_code
+		summarizeBy: none
+		sourceColumn: current_location_code
+
+		annotation SummarizationSetBy = Automatic
+
+	column machine_center_no
+		dataType: string
+		lineageTag: 1ae91267-4aa7-4c86-bb2b-86eec94c3c0a
+		sourceLineageTag: machine_center_no
+		summarizeBy: none
+		sourceColumn: machine_center_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column quantity
+		dataType: double
+		lineageTag: a5b473fd-4e5e-4a65-b54f-6b9f2f996b76
+		sourceLineageTag: quantity
+		summarizeBy: sum
+		sourceColumn: quantity
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column remaining_quantity
+		dataType: double
+		lineageTag: 5af50237-ac3a-4fdb-87ba-f0d83b94ae6c
+		sourceLineageTag: remaining_quantity
+		summarizeBy: sum
+		sourceColumn: remaining_quantity
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column past_location_code
+		dataType: string
+		lineageTag: b6740bcb-87aa-4c8d-a3db-9b9307fbcbea
+		sourceLineageTag: past_location_code
+		summarizeBy: none
+		sourceColumn: past_location_code
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'No.'
+		dataType: string
+		lineageTag: 6ac09317-693a-493d-9394-922d930c3edc
+		sourceLineageTag: No.
+		summarizeBy: none
+		sourceColumn: No.
+
+		annotation SummarizationSetBy = Automatic
+
+	column Description
+		dataType: string
+		lineageTag: f0524b06-9e15-4ab3-b792-63ab09d2e073
+		sourceLineageTag: Description
+		summarizeBy: none
+		sourceColumn: Description
+
+		annotation SummarizationSetBy = Automatic
+
+	column operation_no
+		dataType: string
+		lineageTag: 0807d10a-8075-4073-af00-50deeebd756f
+		sourceLineageTag: operation_no
+		summarizeBy: none
+		sourceColumn: operation_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_no
+		dataType: string
+		lineageTag: 6210a298-d716-4270-9ae0-dfcbc14da7e5
+		sourceLineageTag: item_no
+		summarizeBy: none
+		sourceColumn: item_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column Status
+		dataType: string
+		lineageTag: feb235ca-556b-406d-9170-30d74f78fb0c
+		sourceLineageTag: Status
+		summarizeBy: none
+		sourceColumn: Status
+
+		annotation SummarizationSetBy = Automatic
+
+	column SO
+		dataType: string
+		lineageTag: 980d4da8-1c23-47f4-8755-a4acc9ccb143
+		sourceLineageTag: SO
+		summarizeBy: none
+		sourceColumn: SO
+
+		annotation SummarizationSetBy = Automatic
+
+	column KEYPO
+		dataType: string
+		lineageTag: eac0eab9-5d1d-4334-851b-7369f587bb75
+		sourceLineageTag: KEYPO
+		summarizeBy: none
+		sourceColumn: KEYPO
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_npd_prod_status = entity
+		mode: directLake
+		source
+			entityName: gold_npd_prod_status
+			schemaName: pd
+			expressionSource: 'DirectLake - Gold_Product_Dev_Lakehouse'
+

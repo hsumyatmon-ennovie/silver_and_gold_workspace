@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "Refresh BC 1AM"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "21712097-0ed7-b2b1-4780-a4e0b2ce28c4"
+  }
+}

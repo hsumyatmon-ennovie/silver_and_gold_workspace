@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Notebook",
+    "displayName": "MRP Notebook - Use in Pipeline"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "7a8e82cf-f84d-b538-4a91-f66fbd930c4b"
+  }
+}

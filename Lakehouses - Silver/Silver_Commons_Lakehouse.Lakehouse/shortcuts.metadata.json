@@ -1,0 +1,50 @@
+[
+  {
+    "name": "silver_order_type",
+    "path": "/Tables/cmn",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/dbo/cmn.bronze_order_type",
+        "itemId": "3ea0efcd-03d5-44f1-8e70-99f52a5c2a22",
+        "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a"
+      }
+    }
+  },
+  {
+    "name": "silver_Old_AR_SAP",
+    "path": "/Tables/cmn",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/dbo/cmn.bronze_Old_AR_SAP",
+        "itemId": "3ea0efcd-03d5-44f1-8e70-99f52a5c2a22",
+        "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a"
+      }
+    }
+  },
+  {
+    "name": "silver_holiday_calendar",
+    "path": "/Tables/cmn",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/dbo/cmm_bronze_holiday_calendar",
+        "itemId": "3ea0efcd-03d5-44f1-8e70-99f52a5c2a22",
+        "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a"
+      }
+    }
+  },
+  {
+    "name": "silver_AR_SAP_022018_072025",
+    "path": "/Tables/cmn",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/dbo/cmn.bronze_AR_SAP_022018-072025",
+        "itemId": "3ea0efcd-03d5-44f1-8e70-99f52a5c2a22",
+        "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a"
+      }
+    }
+  }
+]

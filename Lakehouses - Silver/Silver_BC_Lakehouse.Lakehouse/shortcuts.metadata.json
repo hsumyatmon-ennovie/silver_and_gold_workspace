@@ -1,0 +1,14 @@
+[
+  {
+    "name": "bc",
+    "path": "/Tables",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/bc",
+        "itemId": "0632caf0-4c16-428b-97c0-38fe47fd1957",
+        "workspaceId": "86ca13b5-ed67-436a-9a2b-6902a609bff1"
+      }
+    }
+  }
+]

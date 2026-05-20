@@ -1,0 +1,49 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "name": "Item Ledger",
+        "type": "RefreshDataflow",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "dataflowId": "ef08704f-4b3a-40f2-95f2-88bc459f8bc0",
+          "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+          "notifyOption": "NoNotification",
+          "dataflowType": "Dataflow-Gen2"
+        }
+      },
+      {
+        "name": "Prod Routing Line",
+        "type": "RefreshDataflow",
+        "dependsOn": [
+          {
+            "activity": "Item Ledger",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "dataflowId": "eb5aba5f-2e54-4f93-8238-31fb17a00d47",
+          "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a",
+          "notifyOption": "NoNotification",
+          "dataflowType": "Dataflow-Gen2"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "CopyJob",
+    "displayName": "Copy Loading Capacity "
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "7976c9e5-ce80-b71a-4cfd-ec8887041b87"
+  }
+}

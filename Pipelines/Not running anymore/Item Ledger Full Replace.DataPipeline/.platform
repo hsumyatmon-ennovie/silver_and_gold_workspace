@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "Item Ledger Full Replace"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "1d7bde62-20f7-a470-4603-d772accaa4d8"
+  }
+}

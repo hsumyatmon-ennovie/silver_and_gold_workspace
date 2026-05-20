@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "Sync Once Two Hours"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "016ada05-dcb1-b7be-45f7-f2ff49a4b978"
+  }
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "silver_sales_invoice_header_line",
+    "path": "/Tables/fa",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/dbo/fa.bronze_sales_invoice_line",
+        "itemId": "3ea0efcd-03d5-44f1-8e70-99f52a5c2a22",
+        "workspaceId": "a873b8b8-df07-446b-8592-ed8b6ea2884a"
+      }
+    }
+  }
+]

@@ -1,0 +1,192 @@
+table gold_npd_sketch_mapping
+	lineageTag: 7914ac7f-8638-44fd-b6a3-33d87c4eca3e
+	sourceLineageTag: [pd].[gold_npd_sketch_mapping]
+
+	column created_on
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: d6602d4d-c8d4-47f7-862e-eaea7bf792f3
+		sourceLineageTag: created_on
+		summarizeBy: none
+		sourceColumn: created_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column modified_on
+		dataType: string
+		lineageTag: e6b6809f-db10-4355-9f38-30a464d44e21
+		sourceLineageTag: modified_on
+		summarizeBy: none
+		sourceColumn: modified_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column sketch_number
+		dataType: string
+		lineageTag: f50d5676-8d82-497e-b2ea-492192089d05
+		sourceLineageTag: sketch_number
+		summarizeBy: none
+		sourceColumn: sketch_number
+
+		annotation SummarizationSetBy = Automatic
+
+	column order_type_name
+		dataType: string
+		lineageTag: 868d6032-5786-4f93-9975-428e61428612
+		sourceLineageTag: order_type_name
+		summarizeBy: none
+		sourceColumn: order_type_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column customer_approved_id
+		dataType: string
+		lineageTag: 175f6a45-cf1d-4bb7-8a7f-4bc1cbfc3a08
+		sourceLineageTag: customer_approved_id
+		summarizeBy: none
+		sourceColumn: customer_approved_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column customer_no
+		dataType: string
+		lineageTag: d7c81933-55b7-408b-a2fb-144d4f32eb14
+		sourceLineageTag: customer_no
+		summarizeBy: none
+		sourceColumn: customer_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_no
+		dataType: string
+		lineageTag: be3cdbe5-5ec6-45dc-82a7-a6063d384a01
+		sourceLineageTag: item_no
+		summarizeBy: none
+		sourceColumn: item_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_description
+		dataType: string
+		lineageTag: 1a51892f-2549-4650-abc4-23d97d5f44a5
+		sourceLineageTag: item_description
+		summarizeBy: none
+		sourceColumn: item_description
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_qty
+		dataType: string
+		lineageTag: 7b2e06c7-35e0-47a6-b5db-c51b1329ad90
+		sourceLineageTag: item_qty
+		summarizeBy: none
+		sourceColumn: item_qty
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_uom
+		dataType: string
+		lineageTag: 0735dc48-9e9b-49d1-ac43-b92aaebb9609
+		sourceLineageTag: item_uom
+		summarizeBy: none
+		sourceColumn: item_uom
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_type
+		dataType: string
+		lineageTag: decf5998-1b4d-462c-b86a-a938da5f8f42
+		sourceLineageTag: prod_order_type
+		summarizeBy: none
+		sourceColumn: prod_order_type
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_no
+		dataType: string
+		lineageTag: 6d57f980-4b6a-44e5-9706-53dd393dba56
+		sourceLineageTag: prod_order_no
+		summarizeBy: none
+		sourceColumn: prod_order_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_orde_line_no
+		dataType: string
+		lineageTag: 77c5c546-e27a-443f-8d19-bb67e019b908
+		sourceLineageTag: prod_orde_line_no
+		summarizeBy: none
+		sourceColumn: prod_orde_line_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_description
+		dataType: string
+		lineageTag: 16db033f-911b-4a01-8d12-2cc83c439ec4
+		sourceLineageTag: prod_order_description
+		summarizeBy: none
+		sourceColumn: prod_order_description
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order
+		dataType: string
+		lineageTag: ff8c8a44-6122-4357-89e2-b4371f5cc673
+		sourceLineageTag: sales_order
+		summarizeBy: none
+		sourceColumn: sales_order
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order_1
+		dataType: string
+		lineageTag: 58c96c7f-2224-49a4-ad1a-7845e55e6c04
+		sourceLineageTag: sales_order_1
+		summarizeBy: none
+		sourceColumn: sales_order_1
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order_line
+		dataType: string
+		lineageTag: 53df78c7-d925-4a1f-9120-39140dd46561
+		sourceLineageTag: sales_order_line
+		summarizeBy: none
+		sourceColumn: sales_order_line
+
+		annotation SummarizationSetBy = Automatic
+
+	column MergedSO
+		dataType: string
+		lineageTag: df3c83e8-6dbe-4a0a-a44c-97ba64d8275e
+		sourceLineageTag: MergedSO
+		summarizeBy: none
+		sourceColumn: MergedSO
+
+		annotation SummarizationSetBy = Automatic
+
+	column MergedProd
+		dataType: string
+		lineageTag: 445ffbd6-0aa0-4cb7-a115-637c84e94f06
+		sourceLineageTag: MergedProd
+		summarizeBy: none
+		sourceColumn: MergedProd
+
+		annotation SummarizationSetBy = Automatic
+
+	column do_abbr
+		dataType: string
+		lineageTag: f3e222ee-967e-45f9-86cf-0c25903c3690
+		sourceLineageTag: do_abbr
+		summarizeBy: none
+		sourceColumn: do_abbr
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_npd_sketch_mapping = entity
+		mode: directLake
+		source
+			entityName: gold_npd_sketch_mapping
+			schemaName: pd
+			expressionSource: 'DirectLake - Gold_Product_Dev_Lakehouse'
+

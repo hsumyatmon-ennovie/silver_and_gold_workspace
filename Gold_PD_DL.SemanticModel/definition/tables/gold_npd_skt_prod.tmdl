@@ -1,0 +1,112 @@
+table gold_npd_skt_prod
+	lineageTag: 00b05c58-2f66-4649-82ca-c1de8177f6c0
+	sourceLineageTag: [pd].[gold_npd_skt_prod]
+
+	column SO
+		dataType: string
+		lineageTag: 1802750b-1366-4e92-86df-a03e9a6e1fac
+		sourceLineageTag: SO
+		summarizeBy: none
+		sourceColumn: SO
+
+		annotation SummarizationSetBy = Automatic
+
+	column SO_abbr
+		dataType: string
+		lineageTag: e6d57a5c-bf3d-409a-bb61-6eafccf987db
+		sourceLineageTag: SO_abbr
+		summarizeBy: none
+		sourceColumn: SO_abbr
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_no
+		dataType: string
+		lineageTag: 8c890c0e-a210-4fea-af5a-ae9693516859
+		sourceLineageTag: item_no
+		summarizeBy: none
+		sourceColumn: item_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column เลข_SKT
+		dataType: string
+		lineageTag: 90e8d396-ec2b-4b4c-90ed-4c468ce9fa82
+		sourceLineageTag: เลข_SKT
+		summarizeBy: none
+		sourceColumn: เลข_SKT
+
+		annotation SummarizationSetBy = Automatic
+
+	column เลข_PROD
+		dataType: string
+		lineageTag: 2fb29922-a2ab-4b64-b674-7c3172185aa2
+		sourceLineageTag: เลข_PROD
+		summarizeBy: none
+		sourceColumn: เลข_PROD
+
+		annotation SummarizationSetBy = Automatic
+
+	column Routing
+		dataType: string
+		lineageTag: 3ecbbc3b-d70c-4a72-8f22-1def35a96f57
+		sourceLineageTag: Routing
+		summarizeBy: none
+		sourceColumn: Routing
+
+		annotation SummarizationSetBy = Automatic
+
+	column latest_created_on
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 2e3e54ca-5745-42e7-bda0-d4ecb2abc0f8
+		sourceLineageTag: latest_created_on
+		summarizeBy: none
+		sourceColumn: latest_created_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column LatestCreated_DayMonth
+		dataType: string
+		lineageTag: 0ebfb1bd-8d10-4f88-b4a9-791726cfd726
+		sourceLineageTag: LatestCreated_DayMonth
+		summarizeBy: none
+		sourceColumn: LatestCreated_DayMonth
+
+		annotation SummarizationSetBy = Automatic
+
+	column Source
+		dataType: string
+		lineageTag: 0cedaf42-d260-4f93-8865-d1c977ac9561
+		sourceLineageTag: Source
+		summarizeBy: none
+		sourceColumn: Source
+
+		annotation SummarizationSetBy = Automatic
+
+	column Sequence
+		dataType: int64
+		formatString: 0
+		lineageTag: d84d5683-9e11-4068-9f87-0c7c4398553e
+		sourceLineageTag: Sequence
+		summarizeBy: sum
+		sourceColumn: Sequence
+
+		annotation SummarizationSetBy = Automatic
+
+	column Department
+		dataType: string
+		lineageTag: acd2ca8d-5389-4ffd-bf7e-7c5ade237aee
+		sourceLineageTag: Department
+		summarizeBy: none
+		sourceColumn: Department
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_npd_skt_prod = entity
+		mode: directLake
+		source
+			entityName: gold_npd_skt_prod
+			schemaName: pd
+			expressionSource: 'DirectLake - Gold_Product_Dev_Lakehouse'
+

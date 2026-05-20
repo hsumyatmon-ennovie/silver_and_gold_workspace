@@ -1,0 +1,1316 @@
+{
+  "name": "{{Dataset_Name}}",
+  "compatibilityLevel": 1604,
+  "model": {
+    "name": "{{Dataset_Name}}",
+    "culture": "en-US",
+    "collation": "Latin1_General_100_BIN2_UTF8",
+    "dataAccessOptions": {
+      "legacyRedirects": true,
+      "returnErrorValuesAsNull": true
+    },
+    "defaultPowerBIDataSourceVersion": "powerBI_V3",
+    "sourceQueryCulture": "en-US",
+    "tables": [
+      {
+        "name": "silver_customers",
+        "sourceLineageTag": "[cx].[silver_customers]",
+        "columns": [
+          {
+            "name": "versionnumber",
+            "dataType": "string",
+            "sourceColumn": "versionnumber",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "versionnumber",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "entity_id",
+            "dataType": "string",
+            "sourceColumn": "entity_id",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "entity_id",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "created_on",
+            "dataType": "dateTime",
+            "sourceColumn": "created_on",
+            "formatString": "General Date",
+            "sourceProviderType": "datetime2",
+            "sourceLineageTag": "created_on",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "modified_on",
+            "dataType": "dateTime",
+            "sourceColumn": "modified_on",
+            "formatString": "General Date",
+            "sourceProviderType": "datetime2",
+            "sourceLineageTag": "modified_on",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_no",
+            "dataType": "string",
+            "sourceColumn": "customer_no",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_no",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_name",
+            "dataType": "string",
+            "sourceColumn": "customer_name",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_name",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_location",
+            "dataType": "string",
+            "sourceColumn": "customer_location",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_location",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_cad_std_time",
+            "dataType": "int64",
+            "sourceColumn": "customer_cad_std_time",
+            "formatString": "0",
+            "sourceProviderType": "bigint",
+            "sourceLineageTag": "customer_cad_std_time",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_master_std_time",
+            "dataType": "int64",
+            "sourceColumn": "customer_master_std_time",
+            "formatString": "0",
+            "sourceProviderType": "bigint",
+            "sourceLineageTag": "customer_master_std_time",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_sample_std_time",
+            "dataType": "int64",
+            "sourceColumn": "customer_sample_std_time",
+            "formatString": "0",
+            "sourceProviderType": "bigint",
+            "sourceLineageTag": "customer_sample_std_time",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_abbreviation",
+            "dataType": "string",
+            "sourceColumn": "customer_abbreviation",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_abbreviation",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "cs_team",
+            "dataType": "string",
+            "sourceColumn": "cs_team",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "cs_team",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "cad_manager_team",
+            "dataType": "string",
+            "sourceColumn": "cad_manager_team",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "cad_manager_team",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_address",
+            "dataType": "string",
+            "sourceColumn": "customer_address",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_address",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_address2",
+            "dataType": "string",
+            "sourceColumn": "customer_address2",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_address2",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_city",
+            "dataType": "string",
+            "sourceColumn": "customer_city",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_city",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_country",
+            "dataType": "string",
+            "sourceColumn": "customer_country",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_country",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_phone",
+            "dataType": "string",
+            "sourceColumn": "customer_phone",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_phone",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_moblie_phone",
+            "dataType": "string",
+            "sourceColumn": "customer_moblie_phone",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_moblie_phone",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_contact",
+            "dataType": "string",
+            "sourceColumn": "customer_contact",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_contact",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_email",
+            "dataType": "string",
+            "sourceColumn": "customer_email",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_email",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sink_modified_on",
+            "dataType": "dateTime",
+            "sourceColumn": "sink_modified_on",
+            "formatString": "General Date",
+            "sourceProviderType": "datetime2",
+            "sourceLineageTag": "sink_modified_on",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          }
+        ],
+        "partitions": [
+          {
+            "name": "{{Partition_Name}}",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "silver_customers",
+              "expressionSource": "DatabaseQuery",
+              "schemaName": "cx"
+            }
+          }
+        ],
+        "annotations": [
+          {
+            "name": "IsTableInBiModel",
+            "value": "False"
+          }
+        ]
+      },
+      {
+        "name": "silver_sales_header",
+        "sourceLineageTag": "[cx].[silver_sales_header]",
+        "columns": [
+          {
+            "name": "created_on",
+            "dataType": "dateTime",
+            "sourceColumn": "created_on",
+            "formatString": "General Date",
+            "sourceProviderType": "datetime2",
+            "sourceLineageTag": "created_on",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "modified_on",
+            "dataType": "dateTime",
+            "sourceColumn": "modified_on",
+            "formatString": "General Date",
+            "sourceProviderType": "datetime2",
+            "sourceLineageTag": "modified_on",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_no",
+            "dataType": "string",
+            "sourceColumn": "customer_no",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_no",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_name",
+            "dataType": "string",
+            "sourceColumn": "customer_name",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_name",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_type",
+            "dataType": "string",
+            "sourceColumn": "sales_order_type",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_type",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_no",
+            "dataType": "string",
+            "sourceColumn": "sales_order_no",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_no",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_status",
+            "dataType": "string",
+            "sourceColumn": "sales_order_status",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_status",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_released_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_released_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_released_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_document_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_document_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_document_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_posting_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_posting_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_posting_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_order_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_order_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_order_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_due_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_due_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_due_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_requested_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_requested_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_requested_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_promised_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_promised_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_promised_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_shipment_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_shipment_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_shipment_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_cs_reference",
+            "dataType": "string",
+            "sourceColumn": "sales_order_cs_reference",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_cs_reference",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "cs_team",
+            "dataType": "string",
+            "sourceColumn": "cs_team",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "cs_team",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "cad_manager_team",
+            "dataType": "string",
+            "sourceColumn": "cad_manager_team",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "cad_manager_team",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_currency",
+            "dataType": "string",
+            "sourceColumn": "sales_order_currency",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_currency",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "ship_to_customer",
+            "dataType": "string",
+            "sourceColumn": "ship_to_customer",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "ship_to_customer",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_external_document",
+            "dataType": "string",
+            "sourceColumn": "sales_order_external_document",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_external_document",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "bill_to_customer",
+            "dataType": "string",
+            "sourceColumn": "bill_to_customer",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "bill_to_customer",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_location",
+            "dataType": "string",
+            "sourceColumn": "sales_order_location",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_location",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "item_material",
+            "dataType": "string",
+            "sourceColumn": "item_material",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "item_material",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_amount_VAT",
+            "dataType": "double",
+            "sourceColumn": "sales_order_amount_VAT",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "sales_order_amount_VAT",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_amount",
+            "dataType": "double",
+            "sourceColumn": "sales_order_amount",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "sales_order_amount",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "customer_initials",
+            "dataType": "string",
+            "sourceColumn": "customer_initials",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_initials",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          }
+        ],
+        "partitions": [
+          {
+            "name": "{{Partition_Name}}",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "silver_sales_header",
+              "expressionSource": "DatabaseQuery",
+              "schemaName": "cx"
+            }
+          }
+        ],
+        "annotations": [
+          {
+            "name": "IsTableInBiModel",
+            "value": "False"
+          }
+        ]
+      },
+      {
+        "name": "silver_sales_line",
+        "sourceLineageTag": "[cx].[silver_sales_line]",
+        "columns": [
+          {
+            "name": "created_on",
+            "dataType": "dateTime",
+            "sourceColumn": "created_on",
+            "formatString": "General Date",
+            "sourceProviderType": "datetime2",
+            "sourceLineageTag": "created_on",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "modified_on",
+            "dataType": "dateTime",
+            "sourceColumn": "modified_on",
+            "formatString": "General Date",
+            "sourceProviderType": "datetime2",
+            "sourceLineageTag": "modified_on",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_type",
+            "dataType": "string",
+            "sourceColumn": "sales_order_type",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_type",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "customer_no",
+            "dataType": "string",
+            "sourceColumn": "customer_no",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "customer_no",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_no",
+            "dataType": "string",
+            "sourceColumn": "sales_order_no",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_no",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_customer_noted",
+            "dataType": "string",
+            "sourceColumn": "sales_line_customer_noted",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_line_customer_noted",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_customer_remark",
+            "dataType": "string",
+            "sourceColumn": "sales_line_customer_remark",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_line_customer_remark",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_line_no",
+            "dataType": "int64",
+            "sourceColumn": "sales_order_line_no",
+            "formatString": "0",
+            "sourceProviderType": "bigint",
+            "sourceLineageTag": "sales_order_line_no",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "item_no",
+            "dataType": "string",
+            "sourceColumn": "item_no",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "item_no",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "item_description",
+            "dataType": "string",
+            "sourceColumn": "item_description",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "item_description",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "item_reference",
+            "dataType": "string",
+            "sourceColumn": "item_reference",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "item_reference",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "item_quantity",
+            "dataType": "double",
+            "sourceColumn": "item_quantity",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "item_quantity",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "item_quantity_shipped",
+            "dataType": "double",
+            "sourceColumn": "item_quantity_shipped",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "item_quantity_shipped",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "item_quantity_invoiced",
+            "dataType": "double",
+            "sourceColumn": "item_quantity_invoiced",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "item_quantity_invoiced",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "item_outstanding",
+            "dataType": "double",
+            "sourceColumn": "item_outstanding",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "item_outstanding",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "item_quantity_to_ship",
+            "dataType": "double",
+            "sourceColumn": "item_quantity_to_ship",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "item_quantity_to_ship",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "item_quantity_to_invoice",
+            "dataType": "double",
+            "sourceColumn": "item_quantity_to_invoice",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "item_quantity_to_invoice",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "item_uom",
+            "dataType": "string",
+            "sourceColumn": "item_uom",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "item_uom",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "item_location",
+            "dataType": "string",
+            "sourceColumn": "item_location",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "item_location",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "item_posting_group",
+            "dataType": "string",
+            "sourceColumn": "item_posting_group",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "item_posting_group",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_unit_price",
+            "dataType": "double",
+            "sourceColumn": "sales_line_unit_price",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "sales_line_unit_price",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "item_unit_cost",
+            "dataType": "double",
+            "sourceColumn": "item_unit_cost",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "item_unit_cost",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_amount",
+            "dataType": "double",
+            "sourceColumn": "sales_line_amount",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "sales_line_amount",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_amount_VAT",
+            "dataType": "double",
+            "sourceColumn": "sales_line_amount_VAT",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "sales_line_amount_VAT",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_outstanding_amount",
+            "dataType": "double",
+            "sourceColumn": "sales_line_outstanding_amount",
+            "sourceProviderType": "decimal",
+            "sourceLineageTag": "sales_line_outstanding_amount",
+            "summarizeBy": "sum",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              },
+              {
+                "name": "PBI_FormatHint",
+                "value": "{\"isGeneralNumber\":true}"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_requested_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_line_requested_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_line_requested_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_promised_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_line_promised_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_line_promised_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_plan_delivery",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_line_plan_delivery",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_line_plan_delivery",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_line_plan_shipment",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_line_plan_shipment",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_line_plan_shipment",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_shipment_date",
+            "dataType": "dateTime",
+            "sourceColumn": "sales_order_shipment_date",
+            "formatString": "General Date",
+            "sourceProviderType": "date",
+            "sourceLineageTag": "sales_order_shipment_date",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "sales_order_currency",
+            "dataType": "string",
+            "sourceColumn": "sales_order_currency",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "sales_order_currency",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          },
+          {
+            "name": "item_material",
+            "dataType": "string",
+            "sourceColumn": "item_material",
+            "sourceProviderType": "varchar",
+            "sourceLineageTag": "item_material",
+            "summarizeBy": "none",
+            "annotations": [
+              {
+                "name": "SummarizationSetBy",
+                "value": "Automatic"
+              }
+            ]
+          }
+        ],
+        "partitions": [
+          {
+            "name": "{{Partition_Name}}",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "silver_sales_line",
+              "expressionSource": "DatabaseQuery",
+              "schemaName": "cx"
+            }
+          }
+        ],
+        "annotations": [
+          {
+            "name": "IsTableInBiModel",
+            "value": "False"
+          }
+        ]
+      }
+    ],
+    "expressions": [
+      {
+        "name": "DatabaseQuery",
+        "kind": "m",
+        "expression": "let\n    database = {{TDS_Endpoint}}\nin\n    database\n"
+      }
+    ],
+    "annotations": [
+      {
+        "name": "__PBI_TimeIntelligenceEnabled",
+        "value": "0"
+      },
+      {
+        "name": "SourceLineageTagType",
+        "value": "DatabaseFullyQualifiedName"
+      }
+    ]
+  }
+}

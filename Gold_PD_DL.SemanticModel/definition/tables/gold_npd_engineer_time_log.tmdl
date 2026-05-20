@@ -1,0 +1,97 @@
+table gold_npd_engineer_time_log
+	lineageTag: 7d01ecc9-d2e9-4527-b8dc-2143d40a24c9
+	sourceLineageTag: [pd].[gold_npd_engineer_time_log]
+
+	column pd_sketch_item
+		dataType: string
+		lineageTag: 61928433-b612-45dd-8623-5cbb4d090046
+		sourceLineageTag: pd_sketch_item
+		summarizeBy: none
+		sourceColumn: pd_sketch_item
+
+		annotation SummarizationSetBy = Automatic
+
+	column pd_sketch_verion
+		dataType: string
+		lineageTag: 6aad4149-5ae0-47a5-94e5-3c21eaf4a829
+		sourceLineageTag: pd_sketch_verion
+		summarizeBy: none
+		sourceColumn: pd_sketch_verion
+
+		annotation SummarizationSetBy = Automatic
+
+	column created_on
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 171ec1e0-697d-427d-9150-be59852e3aaf
+		sourceLineageTag: created_on
+		summarizeBy: none
+		sourceColumn: created_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column pd_start
+		dataType: string
+		lineageTag: f1481b65-2bf9-415b-a3a1-59f2769cd5d6
+		sourceLineageTag: pd_start
+		summarizeBy: none
+		sourceColumn: pd_start
+
+		annotation SummarizationSetBy = Automatic
+
+	column modified_on
+		dataType: string
+		lineageTag: d261c752-6c4a-4500-bc67-2dc5c0aff527
+		sourceLineageTag: modified_on
+		summarizeBy: none
+		sourceColumn: modified_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column pd_stop
+		dataType: string
+		lineageTag: 66189626-2a11-4f74-abf2-27cc844c2b02
+		sourceLineageTag: pd_stop
+		summarizeBy: none
+		sourceColumn: pd_stop
+
+		annotation SummarizationSetBy = Automatic
+
+	column pd_step
+		dataType: string
+		lineageTag: c20ae3b1-4c0a-430c-b5fd-ae6a45241a84
+		sourceLineageTag: pd_step
+		summarizeBy: none
+		sourceColumn: pd_step
+
+		annotation SummarizationSetBy = Automatic
+
+	column CustomerRevisionHours
+		dataType: double
+		lineageTag: fddc8269-12cf-4abe-8746-22116549ad80
+		sourceLineageTag: CustomerRevisionHours
+		summarizeBy: sum
+		sourceColumn: CustomerRevisionHours
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column TotalHours
+		dataType: double
+		lineageTag: 9f010707-e1b3-4fcf-8ec9-64666f238756
+		sourceLineageTag: TotalHours
+		summarizeBy: sum
+		sourceColumn: TotalHours
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	partition gold_npd_engineer_time_log = entity
+		mode: directLake
+		source
+			entityName: gold_npd_engineer_time_log
+			schemaName: pd
+			expressionSource: 'DirectLake - Gold_Product_Dev_Lakehouse'
+

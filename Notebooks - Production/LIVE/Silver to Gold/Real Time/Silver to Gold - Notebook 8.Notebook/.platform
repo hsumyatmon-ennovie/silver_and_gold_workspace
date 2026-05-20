@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Notebook",
+    "displayName": "Silver to Gold - Notebook 8"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "261c59f4-944a-9440-4c27-bc8ed1fd44d4"
+  }
+}

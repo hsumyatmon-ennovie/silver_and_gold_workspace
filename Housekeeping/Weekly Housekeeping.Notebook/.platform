@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Notebook",
+    "displayName": "Weekly Housekeeping"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "795292a1-310a-b23a-45b5-597f8a02cc76"
+  }
+}

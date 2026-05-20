@@ -1,0 +1,39 @@
+[
+  {
+    "name": "silver_loading_capacity",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/gold_loading_capacity",
+        "itemId": "1f9671a6-5fd3-4e3d-b95a-098d6981cec9",
+        "workspaceId": "76440a40-9a4e-480f-bd27-05d80114a548"
+      }
+    }
+  },
+  {
+    "name": "silver_autoplanning_output",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/dbo/autoplanning_output",
+        "itemId": "eb2ffe55-e077-4fc8-9cbe-cba51952dda5",
+        "workspaceId": "76440a40-9a4e-480f-bd27-05d80114a548"
+      }
+    }
+  },
+  {
+    "name": "gold_mold_item_parts",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/prod/gold_mold_item_parts",
+        "itemId": "d946d4d9-c1f4-9817-4f2e-36f96fa25cdd",
+        "workspaceId": "00000000-0000-0000-0000-000000000000",
+        "artifactType": "Lakehouse"
+      }
+    }
+  }
+]

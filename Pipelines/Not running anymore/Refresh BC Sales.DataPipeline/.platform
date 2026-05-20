@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "Refresh BC Sales"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "d5e99445-4596-aebf-4de7-3238f12f7cd8"
+  }
+}

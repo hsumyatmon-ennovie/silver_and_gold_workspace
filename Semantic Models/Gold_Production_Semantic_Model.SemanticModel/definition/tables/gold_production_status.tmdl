@@ -1,0 +1,283 @@
+table gold_production_status
+	lineageTag: c2ab149d-e069-4c0a-93b1-9ff8878f2de9
+	sourceLineageTag: [prod].[gold_production_status]
+
+	column created_on
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 0d5dd899-d9b7-4c09-b9ae-657d5525b3b1
+		sourceLineageTag: created_on
+		summarizeBy: none
+		sourceColumn: created_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column modified_on
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime2
+		lineageTag: 88db577a-ff6a-49cc-badf-4641afe3b26e
+		sourceLineageTag: modified_on
+		summarizeBy: none
+		sourceColumn: modified_on
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_no
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: d4d37c22-0861-4818-b1df-c97e44822c31
+		sourceLineageTag: prod_order_no
+		summarizeBy: none
+		sourceColumn: prod_order_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_line_no
+		dataType: string
+		sourceProviderType: varchar(255)
+		lineageTag: 15ce81eb-53e4-4081-81f9-5a2eeb50aaa8
+		sourceLineageTag: prod_order_line_no
+		summarizeBy: none
+		sourceColumn: prod_order_line_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column job_sheet_no
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 2bf7aca6-d45e-4819-8af7-8fc2205ec36c
+		sourceLineageTag: job_sheet_no
+		summarizeBy: none
+		sourceColumn: job_sheet_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column type_name
+		dataType: string
+		sourceProviderType: varchar(200)
+		lineageTag: 30608258-3d05-4c47-80ee-92fe6a863e4f
+		sourceLineageTag: type_name
+		summarizeBy: none
+		sourceColumn: type_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column prod_order_status
+		dataType: string
+		sourceProviderType: varchar(200)
+		lineageTag: 27821a5b-6e31-4bc4-8d0e-3bd48aab92fa
+		sourceLineageTag: prod_order_status
+		summarizeBy: none
+		sourceColumn: prod_order_status
+
+		annotation SummarizationSetBy = Automatic
+
+	column open
+		dataType: string
+		sourceProviderType: varchar(50)
+		lineageTag: 9be3251b-848d-40ec-a769-38643b144d70
+		sourceLineageTag: open
+		summarizeBy: none
+		sourceColumn: open
+
+		annotation SummarizationSetBy = Automatic
+
+	column sales_order_no
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 0831426d-4361-466e-9592-4f1b1d12791a
+		sourceLineageTag: sales_order_no
+		summarizeBy: none
+		sourceColumn: sales_order_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column current_location_code
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 3d6b6c8f-9663-4e82-ae62-e09c3e8ccfb9
+		sourceLineageTag: current_location_code
+		summarizeBy: none
+		sourceColumn: current_location_code
+
+		annotation SummarizationSetBy = Automatic
+
+	column past_location_code
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 44ac9af2-8df9-469e-8478-dab17adb69c1
+		sourceLineageTag: past_location_code
+		summarizeBy: none
+		sourceColumn: past_location_code
+
+		annotation SummarizationSetBy = Automatic
+
+	column employee_no
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 956954f9-f924-4398-b432-418695274bfd
+		sourceLineageTag: employee_no
+		summarizeBy: none
+		sourceColumn: employee_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column user_id
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: e0dcffae-9aff-4e21-bea9-19d5b9b7c791
+		sourceLineageTag: user_id
+		summarizeBy: none
+		sourceColumn: user_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column date_out
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 5d952825-3f3b-48da-801a-fcf842a887b2
+		sourceLineageTag: date_out
+		summarizeBy: none
+		sourceColumn: date_out
+
+		annotation SummarizationSetBy = Automatic
+
+	column quantity
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: 4e978d87-97c9-4174-ba4f-7a58eca7bf98
+		sourceLineageTag: quantity
+		summarizeBy: sum
+		sourceColumn: quantity
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column date_in
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: df34e42f-11a9-4f36-a579-9ce8b4700e5b
+		sourceLineageTag: date_in
+		summarizeBy: none
+		sourceColumn: date_in
+
+		annotation SummarizationSetBy = Automatic
+
+	column time_in
+		dataType: string
+		sourceProviderType: varchar(50)
+		lineageTag: a381a345-bd5e-4a90-a6dd-0240f3f270b0
+		sourceLineageTag: time_in
+		summarizeBy: none
+		sourceColumn: time_in
+
+		annotation SummarizationSetBy = Automatic
+
+	column remaining_quantity
+		dataType: double
+		sourceProviderType: decimal(18, 2)
+		lineageTag: d88fe4be-d921-47e6-ba88-740b676b0e9a
+		sourceLineageTag: remaining_quantity
+		summarizeBy: sum
+		sourceColumn: remaining_quantity
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column operation_no
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 351d765b-8ba1-45d8-a510-b08ee407cd9e
+		sourceLineageTag: operation_no
+		summarizeBy: none
+		sourceColumn: operation_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column item_no
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 4214b865-c014-4716-b8b5-17850222e4b6
+		sourceLineageTag: item_no
+		summarizeBy: none
+		sourceColumn: item_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column entry_no_auto_no
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 8279a323-3e71-485d-be98-016ced06ba2c
+		sourceLineageTag: entry_no_auto_no
+		summarizeBy: none
+		sourceColumn: entry_no_auto_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column machine_center_no
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 4d16102c-9d6d-4dd0-908e-ae7b04d464af
+		sourceLineageTag: machine_center_no
+		summarizeBy: none
+		sourceColumn: machine_center_no
+
+		annotation SummarizationSetBy = Automatic
+
+	column out_qty
+		dataType: int64
+		formatString: 0
+		sourceProviderType: bigint
+		lineageTag: 220d91f4-19a7-4cc1-956e-382ae87ba721
+		sourceLineageTag: out_qty
+		summarizeBy: sum
+		sourceColumn: out_qty
+
+		annotation SummarizationSetBy = Automatic
+
+	column pol
+		dataType: string
+		sourceProviderType: varchar(355)
+		lineageTag: 77dfb17a-4658-47de-9d00-5d1cb11cc063
+		sourceLineageTag: pol
+		summarizeBy: none
+		sourceColumn: pol
+
+		annotation SummarizationSetBy = Automatic
+
+	column created_on_time
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: date
+		lineageTag: 442dfbc3-1f74-45a0-9303-4310e3e2ea4c
+		sourceLineageTag: created_on_time
+		summarizeBy: none
+		sourceColumn: created_on_time
+
+		annotation SummarizationSetBy = Automatic
+
+	column cell
+		dataType: string
+		sourceProviderType: varchar(100)
+		lineageTag: 3fbb895c-3ad8-4d62-b687-24ab27888526
+		sourceLineageTag: cell
+		summarizeBy: none
+		sourceColumn: cell
+
+		annotation SummarizationSetBy = Automatic
+
+	partition gold_production_status = entity
+		mode: directLake
+		source
+			entityName: gold_production_status
+			schemaName: prod
+			expressionSource: DatabaseQuery
+
+	annotation PBI_ResultType = Table
+
