@@ -1762,9 +1762,25 @@ spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
 TGT_TBL = "Gold_Customer_Exp_Lakehouse.cx.gold_posted_sales_inv_amount_sh"
 
 src_sql = """
-SELECT 
+WITH pod_src AS (
+    -- engine-anchored due date from planning_operation_due:
+    -- one row per prod_order_no, latest engine_run.
+    SELECT prod_order_no, planned_prod_order_due_date
+    FROM (
+        SELECT
+            prod_order_no,
+            prod_order_due_date AS planned_prod_order_due_date,
+            ROW_NUMBER() OVER (
+                PARTITION BY prod_order_no
+                ORDER BY engine_run_ts DESC
+            ) AS rn
+        FROM Gold_Production_Lakehouse.prod.planning_operation_due
+    )
+    WHERE rn = 1
+)
+SELECT
     -- Production Order
-    po.`Due Date`                  AS `Due_Date`,
+    COALESCE(pod.planned_prod_order_due_date, po.`Due Date`) AS `Due_Date`,
     po.`Status`                    AS `Status`,
     po.`No.`                       AS `No`,
     po.`Description`               AS `Prod_Description`,
@@ -1803,6 +1819,9 @@ SELECT
     sl.`Promised_Delivery_Date`    AS `Promised_Delivery_Date`
 
 FROM Silver_BC_Lakehouse.bc.`Production Order` po
+
+LEFT JOIN pod_src pod
+    ON pod.prod_order_no = po.`No.`
 
 LEFT JOIN Silver_BC_Lakehouse.bc.`Item` it
     ON po.`Source No.` = it.`No.`
