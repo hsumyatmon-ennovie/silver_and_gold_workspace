@@ -1763,20 +1763,23 @@ TGT_TBL = "Gold_Customer_Exp_Lakehouse.cx.gold_posted_sales_inv_amount_sh"
 
 src_sql = """
 WITH pod_src AS (
-    -- engine-anchored due date from planning_operation_due:
-    -- one row per prod_order_no, latest engine_run.
-    SELECT prod_order_no, planned_prod_order_due_date
+    -- engine-anchored due date: MAX(scheduled_end_date) within the latest
+    -- engine_run per prod_order_no, from planning_forward_schedule.
+    SELECT
+        prod_order_no,
+        MAX(scheduled_end_date) AS planned_prod_order_due_date
     FROM (
         SELECT
             prod_order_no,
-            prod_order_due_date AS planned_prod_order_due_date,
-            ROW_NUMBER() OVER (
+            scheduled_end_date,
+            DENSE_RANK() OVER (
                 PARTITION BY prod_order_no
                 ORDER BY engine_run_ts DESC
-            ) AS rn
-        FROM Gold_Production_Lakehouse.prod.planning_operation_due
+            ) AS run_rank
+        FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
     )
-    WHERE rn = 1
+    WHERE run_rank = 1
+    GROUP BY prod_order_no
 )
 SELECT
     -- Production Order
