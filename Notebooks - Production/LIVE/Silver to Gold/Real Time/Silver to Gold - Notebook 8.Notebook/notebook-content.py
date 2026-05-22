@@ -974,21 +974,25 @@ from datetime import datetime
 # MAGIC   FROM Gold_Production_Lakehouse.prod.gold_production_status
 # MAGIC ),
 # MAGIC 
-# MAGIC -- engine-anchored due date: one row per prod_order_no (latest engine_run)
-# MAGIC -- because po_src is at order-header grain.
+# MAGIC -- engine-anchored due date: MAX(scheduled_end_date) within the latest
+# MAGIC -- engine_run per prod_order_no (po_src is at order-header grain), from
+# MAGIC -- planning_forward_schedule.
 # MAGIC pod_src AS (
-# MAGIC   SELECT prod_order_no, planned_prod_order_due_date
+# MAGIC   SELECT
+# MAGIC     prod_order_no,
+# MAGIC     MAX(scheduled_end_date) AS planned_prod_order_due_date
 # MAGIC   FROM (
 # MAGIC     SELECT
 # MAGIC       prod_order_no,
-# MAGIC       prod_order_due_date AS planned_prod_order_due_date,
-# MAGIC       ROW_NUMBER() OVER (
+# MAGIC       scheduled_end_date,
+# MAGIC       DENSE_RANK() OVER (
 # MAGIC         PARTITION BY prod_order_no
 # MAGIC         ORDER BY engine_run_ts DESC
-# MAGIC       ) AS rn
-# MAGIC     FROM Gold_Production_Lakehouse.prod.planning_operation_due
+# MAGIC       ) AS run_rank
+# MAGIC     FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
 # MAGIC   )
-# MAGIC   WHERE rn = 1
+# MAGIC   WHERE run_rank = 1
+# MAGIC   GROUP BY prod_order_no
 # MAGIC ),
 # MAGIC 
 # MAGIC -- ------------------ Join + filters ------------------
