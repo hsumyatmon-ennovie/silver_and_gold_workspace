@@ -2212,18 +2212,22 @@ if not spark.catalog.tableExists(target_tbl):
 # MAGIC         po.`Shortcut Dimension 2 Code` AS po_global_dim_2
 # MAGIC     FROM Silver_BC_Lakehouse.bc.`Production Order` po
 # MAGIC     LEFT JOIN (
-# MAGIC         SELECT prod_order_no, planned_prod_order_due_date
+# MAGIC         -- MAX(scheduled_end_date) within the latest engine_run per prod_order_no
+# MAGIC         SELECT
+# MAGIC             prod_order_no,
+# MAGIC             MAX(scheduled_end_date) AS planned_prod_order_due_date
 # MAGIC         FROM (
 # MAGIC             SELECT
 # MAGIC                 prod_order_no,
-# MAGIC                 prod_order_due_date AS planned_prod_order_due_date,
-# MAGIC                 ROW_NUMBER() OVER (
+# MAGIC                 scheduled_end_date,
+# MAGIC                 DENSE_RANK() OVER (
 # MAGIC                     PARTITION BY prod_order_no
 # MAGIC                     ORDER BY engine_run_ts DESC
-# MAGIC                 ) AS rn
-# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_operation_due
+# MAGIC                 ) AS run_rank
+# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
 # MAGIC         )
-# MAGIC         WHERE rn = 1
+# MAGIC         WHERE run_rank = 1
+# MAGIC         GROUP BY prod_order_no
 # MAGIC     ) pod ON pod.prod_order_no = po.`No.`
 # MAGIC ),
 # MAGIC 
@@ -3762,19 +3766,23 @@ print("Rows written:", df.count())
 # MAGIC     ),
 # MAGIC 
 # MAGIC     POD_LATEST AS (
-# MAGIC         -- engine-anchored due date: one row per prod_order_no, latest engine_run
-# MAGIC         SELECT prod_order_no, planned_prod_order_due_date
+# MAGIC         -- engine-anchored due date: MAX(scheduled_end_date) within the latest
+# MAGIC         -- engine_run per prod_order_no, from planning_forward_schedule.
+# MAGIC         SELECT
+# MAGIC             prod_order_no,
+# MAGIC             MAX(scheduled_end_date) AS planned_prod_order_due_date
 # MAGIC         FROM (
 # MAGIC             SELECT
 # MAGIC                 prod_order_no,
-# MAGIC                 prod_order_due_date AS planned_prod_order_due_date,
-# MAGIC                 ROW_NUMBER() OVER (
+# MAGIC                 scheduled_end_date,
+# MAGIC                 DENSE_RANK() OVER (
 # MAGIC                     PARTITION BY prod_order_no
 # MAGIC                     ORDER BY engine_run_ts DESC
-# MAGIC                 ) AS rn
-# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_operation_due
+# MAGIC                 ) AS run_rank
+# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
 # MAGIC         )
-# MAGIC         WHERE rn = 1
+# MAGIC         WHERE run_rank = 1
+# MAGIC         GROUP BY prod_order_no
 # MAGIC     ),
 # MAGIC 
 # MAGIC     CTE AS (
