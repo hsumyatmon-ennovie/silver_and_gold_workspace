@@ -1627,11 +1627,12 @@ prod_line AS (
             AS date
         ) AS fg_start_date,
 
-        -- fg_due_date now comes from prod_order_due_date (engine-anchored via
-        -- planning_operation_due in Notebook 4) instead of line 10000's
-        -- prod_line_due_date. Wrapped in MAX OVER for shape compatibility with
-        -- the rest of the window-based projections; prod_order_due_date is
-        -- constant within a prod_order_no so MAX is a no-op.
+        -- fg_due_date inherits prod_order_due_date from gold_production_order,
+        -- which Notebook 4 populates from MAX(scheduled_end_date) in the latest
+        -- engine_run of planning_forward_schedule (with BC `Due Date` fallback).
+        -- Wrapped in MAX OVER for shape compatibility with the rest of the
+        -- window-based projections; prod_order_due_date is constant within a
+        -- prod_order_no so MAX is a no-op.
         MAX(p.prod_order_due_date) OVER (PARTITION BY p.prod_order_no) AS fg_due_date,
 
         -- ✅ FIX: normalize item_location + use MIN for "casting due/start" (usually the scheduled/target date you want)
