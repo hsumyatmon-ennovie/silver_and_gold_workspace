@@ -152,21 +152,27 @@ from datetime import datetime
 # MAGIC     FROM Silver_BC_Lakehouse.bc.`Item` I
 # MAGIC ),
 # MAGIC 
-# MAGIC /* engine-anchored due dates: latest engine_run per (prod_order_no, prod_order_line_no) */
+# MAGIC /* engine-anchored due dates: MAX(scheduled_end_date) within the latest
+# MAGIC    engine_run per (prod_order_no, prod_order_line_no), from
+# MAGIC    planning_forward_schedule */
 # MAGIC pod_src AS (
-# MAGIC     SELECT prod_order_no, prod_order_line_no, prod_order_due_date AS planned_prod_order_due_date
+# MAGIC     SELECT
+# MAGIC         prod_order_no,
+# MAGIC         prod_order_line_no,
+# MAGIC         MAX(scheduled_end_date) AS planned_prod_order_due_date
 # MAGIC     FROM (
 # MAGIC         SELECT
 # MAGIC             prod_order_no,
 # MAGIC             prod_order_line_no,
-# MAGIC             prod_order_due_date,
-# MAGIC             ROW_NUMBER() OVER (
+# MAGIC             scheduled_end_date,
+# MAGIC             DENSE_RANK() OVER (
 # MAGIC                 PARTITION BY prod_order_no, prod_order_line_no
 # MAGIC                 ORDER BY engine_run_ts DESC
-# MAGIC             ) AS rn
-# MAGIC         FROM Gold_Production_Lakehouse.prod.planning_operation_due
+# MAGIC             ) AS run_rank
+# MAGIC         FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
 # MAGIC     )
-# MAGIC     WHERE rn = 1
+# MAGIC     WHERE run_rank = 1
+# MAGIC     GROUP BY prod_order_no, prod_order_line_no
 # MAGIC ),
 # MAGIC 
 # MAGIC s_src AS (
