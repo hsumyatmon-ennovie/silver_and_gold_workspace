@@ -1087,7 +1087,7 @@ SOURCE_FIRM   = "Silver_Production_Lakehouse.prod.silver_firm_plan_log"
 
 # CHANGE: use BC mirror Production Order instead of silver_prod_order_header
 SOURCE_HEADER = "Silver_BC_Lakehouse.bc.`Production Order`"
-PLANNING_OPERATION_DUE = "Gold_Production_Lakehouse.prod.planning_operation_due"
+PLANNING_FORWARD_SCHEDULE = "Gold_Production_Lakehouse.prod.planning_forward_schedule"
 
 TARGET_TABLE  = "Gold_Production_Lakehouse.prod.gold_compare_plan_vs_actual"
 
@@ -1100,18 +1100,16 @@ header_df = spark.table(SOURCE_HEADER)
 # Ensure date types
 firm_df = firm_df.withColumn("finish_date", F.to_date("finish_date"))
 
-# Planned due dates from engine, latest run per (prod_order_no, prod_order_line_no)
+# Planned due dates from engine: MAX(scheduled_end_date) in the latest
+# engine_run per (prod_order_no, prod_order_line_no)
 pod_w = Window.partitionBy("prod_order_no", "prod_order_line_no").orderBy(F.col("engine_run_ts").desc())
 pod_df = (
-    spark.table(PLANNING_OPERATION_DUE)
-    .select(
-        "prod_order_no", "prod_order_line_no",
-        F.col("prod_order_due_date").alias("planned_prod_order_due_date"),
-        "engine_run_ts",
-    )
-    .withColumn("_rn", F.row_number().over(pod_w))
-    .filter(F.col("_rn") == 1)
-    .drop("_rn", "engine_run_ts")
+    spark.table(PLANNING_FORWARD_SCHEDULE)
+    .select("prod_order_no", "prod_order_line_no", "scheduled_end_date", "engine_run_ts")
+    .withColumn("_rr", F.dense_rank().over(pod_w))
+    .filter(F.col("_rr") == 1)
+    .groupBy("prod_order_no", "prod_order_line_no")
+    .agg(F.max("scheduled_end_date").alias("planned_prod_order_due_date"))
 )
 
 # BC mirror columns have spaces/dots -> select + rename safely
