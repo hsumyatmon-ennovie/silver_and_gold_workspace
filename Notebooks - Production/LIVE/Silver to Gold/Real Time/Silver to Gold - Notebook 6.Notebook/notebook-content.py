@@ -73,40 +73,121 @@ from datetime import datetime
 # MAGIC -- GOLD: gold_production_asgn_cell
 # MAGIC -- FULL REPLACE Spark SQL
 # MAGIC --
-# MAGIC -- Source changed to planning_forward_schedule (engine-anchored).
-# MAGIC -- cell_line  <- assigned_cell_line
-# MAGIC -- prod_line  <- assigned_prod_line
-# MAGIC --
-# MAGIC -- Grain preserved: one row per prod_order (FG line, prod_order_line_no = 10000).
-# MAGIC -- Filter: assigned_cell_line LIKE 'CELL%'
-# MAGIC --         AND assigned_cell_line NOT IN ('CELL105','CELL104','CELL220')
+# MAGIC -- Sources the operation list from planning_forward_schedule
+# MAGIC -- (engine-anchored) instead of BC Prod Order Routing Line.
+# MAGIC -- All downstream ranking / cell-selection logic preserved.
 # MAGIC -- ==============================================================
 # MAGIC 
 # MAGIC CREATE OR REPLACE TABLE Gold_Production_Lakehouse.prod.gold_production_asgn_cell
 # MAGIC USING DELTA
 # MAGIC AS
 # MAGIC 
-# MAGIC WITH src AS (
+# MAGIC WITH rl AS (
+# MAGIC     SELECT DISTINCT
+# MAGIC         prod_order_no,
+# MAGIC         prod_order_line_no,
+# MAGIC         item_no,
+# MAGIC         assigned_cell_line AS routing_no,
+# MAGIC         engine_run_ts      AS modified_on
+# MAGIC     FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
+# MAGIC ),
+# MAGIC 
+# MAGIC rl_f AS (
+# MAGIC     SELECT
+# MAGIC         prod_order_no,
+# MAGIC         item_no,
+# MAGIC         prod_order_line_no,
+# MAGIC         routing_no,
+# MAGIC         modified_on AS _mod_rl_raw
+# MAGIC     FROM rl
+# MAGIC     WHERE prod_order_line_no = 10000
+# MAGIC       AND (
+# MAGIC             routing_no LIKE 'CELL%'
+# MAGIC          OR routing_no LIKE 'OUTSOURCE%'
+# MAGIC       )
+# MAGIC ),
+# MAGIC 
+# MAGIC ranked AS (
+# MAGIC     SELECT
+# MAGIC         *,
+# MAGIC         CASE
+# MAGIC             WHEN regexp_extract(routing_no, '^CELL(\d+)$', 1) <> ''
+# MAGIC             THEN CAST(regexp_extract(routing_no, '^CELL(\d+)$', 1) AS INT)
+# MAGIC             ELSE NULL
+# MAGIC         END AS _suffix_int,
+# MAGIC 
+# MAGIC         ROW_NUMBER() OVER (
+# MAGIC             PARTITION BY prod_order_no, prod_order_line_no
+# MAGIC             ORDER BY
+# MAGIC                 CASE WHEN routing_no = 'CELL108' THEN 1 ELSE 0 END ASC,
+# MAGIC                 CASE
+# MAGIC                     WHEN regexp_extract(routing_no, '^CELL(\d+)$', 1) = ''
+# MAGIC                     THEN 1
+# MAGIC                     ELSE 0
+# MAGIC                 END ASC,
+# MAGIC                 CASE
+# MAGIC                     WHEN regexp_extract(routing_no, '^CELL(\d+)$', 1) <> ''
+# MAGIC                     THEN CAST(regexp_extract(routing_no, '^CELL(\d+)$', 1) AS INT)
+# MAGIC                 END ASC NULLS LAST,
+# MAGIC                 routing_no ASC
+# MAGIC         ) AS _rn
+# MAGIC     FROM rl_f
+# MAGIC ),
+# MAGIC 
+# MAGIC chosen AS (
+# MAGIC     SELECT
+# MAGIC         prod_order_no,
+# MAGIC         item_no,
+# MAGIC         prod_order_line_no,
+# MAGIC         routing_no AS cell_line,
+# MAGIC         _mod_rl_raw
+# MAGIC     FROM ranked
+# MAGIC     WHERE _rn = 1
+# MAGIC ),
+# MAGIC 
+# MAGIC cells AS (
+# MAGIC     SELECT
+# MAGIC         cell_line AS cell_line_join,
+# MAGIC         prod_line,
+# MAGIC         CAST(modified_on AS TIMESTAMP) AS _mod_cl_ts
+# MAGIC     FROM Silver_Production_Lakehouse.prod.silver_cell_list
+# MAGIC ),
+# MAGIC 
+# MAGIC joined AS (
+# MAGIC     SELECT
+# MAGIC         c.prod_order_no,
+# MAGIC         c.item_no,
+# MAGIC         c.prod_order_line_no,
+# MAGIC         c.cell_line,
+# MAGIC         cl.prod_line,
+# MAGIC         c._mod_rl_raw,
+# MAGIC         cl._mod_cl_ts
+# MAGIC     FROM chosen c
+# MAGIC     LEFT JOIN cells cl
+# MAGIC         ON c.cell_line = cl.cell_line_join
+# MAGIC ),
+# MAGIC 
+# MAGIC final_base AS (
 # MAGIC     SELECT DISTINCT
 # MAGIC         prod_order_no,
 # MAGIC         item_no,
 # MAGIC         prod_order_line_no,
-# MAGIC         assigned_cell_line AS cell_line,
-# MAGIC         assigned_prod_line AS prod_line
-# MAGIC     FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
-# MAGIC     WHERE prod_order_line_no = 10000
-# MAGIC       AND assigned_cell_line LIKE 'CELL%'
-# MAGIC       AND assigned_cell_line NOT IN ('CELL105', 'CELL104', 'CELL220')
+# MAGIC         cell_line,
+# MAGIC         prod_line,
+# MAGIC 
+# MAGIC         COALESCE(
+# MAGIC             GREATEST(
+# MAGIC                 CAST(_mod_rl_raw AS TIMESTAMP),
+# MAGIC                 _mod_cl_ts
+# MAGIC             ),
+# MAGIC             CURRENT_TIMESTAMP()
+# MAGIC         ) AS _modified_any
+# MAGIC 
+# MAGIC     FROM joined
 # MAGIC )
 # MAGIC 
-# MAGIC SELECT
-# MAGIC     prod_order_no,
-# MAGIC     item_no,
-# MAGIC     prod_order_line_no,
-# MAGIC     cell_line,
-# MAGIC     prod_line,
-# MAGIC     CURRENT_TIMESTAMP() AS _modified_any
-# MAGIC FROM src;
+# MAGIC SELECT *
+# MAGIC FROM final_base;
 
 # METADATA ********************
 
