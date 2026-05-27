@@ -1136,7 +1136,7 @@ prod_line_cfg = {
 
 prod_tracking_repair_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_productiontrackingrepairprolog",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_productiontrackingrepairprolog",
     
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -1219,7 +1219,7 @@ prod_tracking_repair_cfg = {
 
 casting_part_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_jccastedpartsprod",  
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_jccastedpartsprod",  
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -1324,7 +1324,7 @@ casting_part_cfg = {
 
 casting_tree_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_jccastingtreeprod",  
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_jccastingtreeprod",  
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -1502,7 +1502,7 @@ def transform_casting_prod_order(df):
 
 casting_log_cfg = {
     # ---- SOURCE ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_auditlog",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_auditlog",
 
     # ---- TARGET ----
     "target_schema": "prod",

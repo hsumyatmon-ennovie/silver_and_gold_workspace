@@ -30,7 +30,7 @@
 # MAGIC SELECT DISTINCT
 # MAGIC     dts_sequenceorder AS pd_sequence,
 # MAGIC     dts_stepname      AS pd_step
-# MAGIC FROM  dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.dts_npd_cadroutingsteps
+# MAGIC FROM  dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.dts_npd_cadroutingsteps
 # MAGIC WHERE dts_sequenceorder IS NOT NULL
 # MAGIC   AND dts_stepname IS NOT NULL;
 
@@ -47,7 +47,7 @@
 
 df = spark.read.format("delta").load(
     "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/"
-    "dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/"
+    "dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/"
     "Tables/dts_npd_cadroutingsteps"
 )
 

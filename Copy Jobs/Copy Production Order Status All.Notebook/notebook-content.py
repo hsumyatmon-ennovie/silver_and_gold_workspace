@@ -9,7 +9,7 @@
 # META   "dependencies": {
 # META     "lakehouse": {
 # META       "default_lakehouse": "785307fd-af78-4359-969a-51c937ec834b",
-# META       "default_lakehouse_name": "dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099",
+# META       "default_lakehouse_name": "dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b",
 # META       "default_lakehouse_workspace_id": "17f91c34-23a9-4685-b7f6-2246823b5572",
 # META       "known_lakehouses": [
 # META         {
@@ -352,13 +352,13 @@ def run():
 
 # CELL ********************
 
-BRONZE_PATH    = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/"
+BRONZE_PATH    = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/"
 BRONZE_TABLE   = BRONZE_PATH + "cr535_dsvcproductionorderstatus"
 
-STAGING_PATH   = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Files/silver_staging/"   # Where we drop the single Parquet for Warehouse COPY
+STAGING_PATH   = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Files/silver_staging/"   # Where we drop the single Parquet for Warehouse COPY
 STAGING_ROOT   = STAGING_PATH +  "silver_sync/" + "silver_production_status_all"
 
-WATERMARK_PATH  = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/metadata/"     # Delta table with column: last_processed_ts TIMESTAMP
+WATERMARK_PATH  = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/metadata/"     # Delta table with column: last_processed_ts TIMESTAMP
 WATERMARK_TBL  = WATERMARK_PATH + "silver_wm_prod_production_status_all"
 BACKFILL_FROM  = "2019-01-01"                               # earliest modifiedon to consider (safety)
 CHUNK_MONTHS   = 1                                          # backfill chunk size (months) — balances CUs vs speed
