@@ -109,7 +109,7 @@
                     },
                     "schema": [],
                     "connectionSettings": {
-                      "name": "dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b",
+                      "name": "dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099",
                       "properties": {
                         "type": "Lakehouse",
                         "typeProperties": {

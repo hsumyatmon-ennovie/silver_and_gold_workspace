@@ -1253,7 +1253,7 @@ def run_maintenance_all(table_list: List[str], zorder_cols=None, vacuum_hours=16
 
 customer_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_customers",  
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_customers",  
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "cx",
@@ -2027,7 +2027,7 @@ purchase_line_cfg = {
 
 item_uom_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_itemunitsofmeasure",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_itemunitsofmeasure",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "inv",
@@ -3692,7 +3692,7 @@ shipment_line_cfg = {
 
 employee_rfid_mapping_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_employeerfidmapping",  
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_employeerfidmapping",  
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "cmn",
@@ -3772,7 +3772,7 @@ employee_rfid_mapping_cfg = {
 
 machine_center_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_machinecenter",  
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_machinecenter",  
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "cmn",
@@ -3856,7 +3856,7 @@ machine_center_cfg = {
 
 cell_list_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_cellemaillist",  
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_cellemaillist",  
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -3923,7 +3923,7 @@ cell_list_cfg = {
 
 emp_in_cell_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_silver_cell_employee",  
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_silver_cell_employee",  
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "cmn",
@@ -3995,7 +3995,7 @@ emp_in_cell_cfg = {
 
 npd_worklogs_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_npd_worklogs",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_npd_worklogs",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4080,7 +4080,7 @@ npd_worklogs_cfg = {
 
 routing_steps_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_npd_routingsteps",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_npd_routingsteps",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4161,7 +4161,7 @@ routing_steps_cfg = {
 
 sketch_mapping_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_npd_sketchmapping",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_npd_sketchmapping",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4293,7 +4293,7 @@ sketch_mapping_cfg = {
 
 sketch_master_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_npd_sketchmaster",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_npd_sketchmaster",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4437,7 +4437,7 @@ sketch_master_cfg = {
 
 cad_requests_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_cadrequests",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_cadrequests",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4606,7 +4606,7 @@ cad_requests_cfg = {
 
 engineer_time_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_engineertimelog",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_engineertimelog",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4696,7 +4696,7 @@ engineer_time_cfg = {
 
 sketch_manager_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_npd_cadversions",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_npd_cadversions",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4809,7 +4809,7 @@ sketch_manager_cfg = {
 
 sketch_customer_approval_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_npd_customerapproval",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_npd_customerapproval",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4914,7 +4914,7 @@ sketch_customer_approval_cfg = {
 
 sketch_size_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_npd_childcadsizerequest",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_npd_childcadsizerequest",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -4991,7 +4991,7 @@ sketch_size_cfg = {
 
 sketch_size_master_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_npd_cadsizerequest",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_npd_cadsizerequest",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -5067,7 +5067,7 @@ sketch_size_master_cfg = {
 
 printing_batch_master_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_npd_3dprintingbatchmaster",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_npd_3dprintingbatchmaster",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -5136,7 +5136,7 @@ printing_batch_master_cfg = {
 
 printing_batch_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_npd_3dprintingbatch",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_npd_3dprintingbatch",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -5232,7 +5232,7 @@ printing_batch_cfg = {
 
 wax_receive_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_npd_waxreceive",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_npd_waxreceive",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -5311,7 +5311,7 @@ wax_receive_cfg = {
 
 pd_step_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_npd_cadroutingsteps",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_npd_cadroutingsteps",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -5376,7 +5376,7 @@ pd_step_cfg = {
 
 sketch_collection_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/dts_npd_collection",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/dts_npd_collection",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "pd",
@@ -5849,7 +5849,7 @@ def transform_issue_header(df):
 
 issue_header_cfg = {
     # ---- SOURCE ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_subcontractissueheaders",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_subcontractissueheaders",
 
     # ---- TARGET ----
     "target_schema": "prod",
@@ -5982,7 +5982,7 @@ def transform_sub_contract_issue_lines(df):
 
 issue_lines_cfg = {
     # ---- SOURCE ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_subcontractissuelines",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_subcontractissuelines",
 
     # ---- TARGET ----
     "target_schema": "prod",
@@ -6094,7 +6094,7 @@ issue_lines_cfg = {
 
 plating_prep_jig_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_platingprep_jig",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_platingprep_jig",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -6163,7 +6163,7 @@ plating_prep_jig_cfg = {
 
 sub_contract_price_list_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_subcontpricegrouplist",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_subcontpricegrouplist",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -6231,7 +6231,7 @@ sub_contract_price_list_cfg = {
 
 sub_contract_deduction_lines_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_subcontractdeductionlines",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_subcontractdeductionlines",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -6314,7 +6314,7 @@ sub_contract_deduction_lines_cfg = {
 
 firm_plan_log_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_firmplan_log",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_firmplan_log",
 
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -6765,7 +6765,7 @@ display(df_out.limit(100))
 # MAGIC     dts_waxtometalratio as wax_to_metal_ration,
 # MAGIC     dts_addtobaseweight as add_to_base_weight,
 # MAGIC     dts_tolerance as tolerance
-# MAGIC FROM Dataverse_link.dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.dts_jcwaxtometalratiomaster
+# MAGIC FROM Dataverse_link.dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.dts_jcwaxtometalratiomaster
 
 # METADATA ********************
 
