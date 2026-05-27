@@ -1264,3 +1264,483 @@ print(f"Full replace completed (overwrite) into: {TGT_TBL}")
 # META   "language": "sparksql",
 # META   "language_group": "synapse_pyspark"
 # META }
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC CREATE OR REPLACE TABLE Gold_Product_Dev_Lakehouse.pd.gold_npd_report_overview AS
+# MAGIC 
+# MAGIC WITH
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- 1) Active sketches (180-day lookback, not archived)
+# MAGIC -- ============================================================
+# MAGIC active_sketches AS (
+# MAGIC     SELECT
+# MAGIC         c.sketch_number,
+# MAGIC         c.description,
+# MAGIC         c.submission_date,
+# MAGIC         c.customer_request_date,
+# MAGIC         c.promised_date,
+# MAGIC         c.cad_week,
+# MAGIC         c.cus_req       AS cus_req_week,
+# MAGIC         c.pro_req       AS pro_req_week,
+# MAGIC         c.committed_week,
+# MAGIC         c.cropped_design_image_url,
+# MAGIC         c.additional_photo_url,
+# MAGIC         c.collection_id_name,
+# MAGIC         c.assigned_engineer_name,
+# MAGIC         c.estimated_development_time,
+# MAGIC         c.estimated_production_ready_time,
+# MAGIC         c.customer_target_price,
+# MAGIC         c.customer_design_number,
+# MAGIC         c.created_by_email,
+# MAGIC         c.status_name           AS sketch_status_name,
+# MAGIC         c.status                AS schedule_status,         -- 'On Schedule' / 'Overdue' (vs promised_date)
+# MAGIC         c.customer_name         AS customer_name_raw,
+# MAGIC         c.is_archive_name,
+# MAGIC         c.created_on            AS sketch_created_on,
+# MAGIC         c.modified_on           AS sketch_modified_on
+# MAGIC     FROM Gold_Product_Dev_Lakehouse.pd.gold_cad_requests c
+# MAGIC     WHERE c.is_archive_name = false
+# MAGIC       AND c.submission_date >= date_sub(current_date(), 180)
+# MAGIC       AND c.sketch_number IS NOT NULL
+# MAGIC ),
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- 2) Customer enrichment
+# MAGIC --    NOTE: gold_cad_requests already has customer_name. We pull
+# MAGIC --    customer_abbr and cs_team from gold_customer if available.
+# MAGIC --    Adjust the JOIN key once you confirm which field links them.
+# MAGIC -- ============================================================
+# MAGIC customer_info AS (
+# MAGIC     SELECT
+# MAGIC         TRIM(cus.customer_name)                 AS customer_name_key,
+# MAGIC         MAX(cus.customer_no)                    AS customer_no,
+# MAGIC         MAX(cus.customer_abbr)                  AS customer_abbr,
+# MAGIC         MAX(cus.cs_team)                        AS cs_team
+# MAGIC     FROM Gold_Customer_Exp_Lakehouse.cx.gold_customer cus
+# MAGIC     WHERE cus.customer_name IS NOT NULL
+# MAGIC     GROUP BY TRIM(cus.customer_name)
+# MAGIC ),
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- 3) PRO + item + SO aggregation per sketch
+# MAGIC -- ============================================================
+# MAGIC sketch_pros AS (
+# MAGIC     SELECT
+# MAGIC         sm.sketch_number,
+# MAGIC         -- arrays for HTML detail panel
+# MAGIC         array_distinct(collect_list(sm.item_no))                                                     AS fg_items,
+# MAGIC         array_distinct(filter(collect_list(sm.MergedSO), x -> x IS NOT NULL AND x <> ''))            AS linked_sos,
+# MAGIC         array_distinct(filter(collect_list(
+# MAGIC             CASE WHEN sm.prod_order_no LIKE 'WMT%' THEN sm.prod_order_no END), x -> x IS NOT NULL))  AS master_pros,
+# MAGIC         array_distinct(filter(collect_list(
+# MAGIC             CASE WHEN sm.prod_order_no LIKE 'WSP%' THEN sm.prod_order_no END), x -> x IS NOT NULL))  AS sample_pros,
+# MAGIC         array_distinct(filter(collect_list(
+# MAGIC             CASE WHEN sm.prod_order_no LIKE 'WMT%' THEN sm.item_no END), x -> x IS NOT NULL))        AS master_items,
+# MAGIC         array_distinct(filter(collect_list(
+# MAGIC             CASE WHEN sm.prod_order_no LIKE 'WSP%' THEN sm.item_no END), x -> x IS NOT NULL))        AS sample_items,
+# MAGIC         -- boolean flags
+# MAGIC         MAX(CASE WHEN sm.prod_order_no LIKE 'WMT%' THEN 1 ELSE 0 END) = 1                            AS has_master_pro,
+# MAGIC         MAX(CASE WHEN sm.prod_order_no LIKE 'WSP%' THEN 1 ELSE 0 END) = 1                            AS has_sample_pro
+# MAGIC     FROM Gold_Product_Dev_Lakehouse.pd.gold_npd_sketch_mapping sm
+# MAGIC     WHERE sm.sketch_number IS NOT NULL
+# MAGIC     GROUP BY sm.sketch_number
+# MAGIC ),
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- 4) CAD stage timestamps (7 stages)
+# MAGIC --    Source: gold_npd_skt_prod Department='CAD'
+# MAGIC --    Each Routing string identifies a CAD stage; take MAX(latest_created_on)
+# MAGIC -- ============================================================
+# MAGIC cad_stages AS (
+# MAGIC     SELECT
+# MAGIC         sp.`เลข_SKT`                                                                                         AS sketch_number,
+# MAGIC         MAX(CASE WHEN sp.Routing = 'BACKLOG'                       THEN sp.latest_created_on END)            AS cad_bklg,
+# MAGIC         MAX(CASE WHEN sp.Routing = 'CAD ASSIGNED TO ENGINEER'      THEN sp.latest_created_on END)            AS cad_asgn,
+# MAGIC         MAX(CASE WHEN sp.Routing = 'WAITING FOR MANAGER APPROVAL'  THEN sp.latest_created_on END)            AS cad_mng_app,
+# MAGIC         MAX(CASE WHEN sp.Routing = 'WAITING FOR CUSTOMER APPROVAL' THEN sp.latest_created_on END)            AS cad_cus_app,
+# MAGIC         MAX(CASE WHEN sp.Routing = 'CUSTOMER REVISION'             THEN sp.latest_created_on END)            AS cad_cus_rev,
+# MAGIC         MAX(CASE WHEN sp.Routing = 'CAD PRODUCTION READY'          THEN sp.latest_created_on END)            AS cad_ready,
+# MAGIC         MAX(CASE WHEN sp.Routing = '3D PRINTING'                   THEN sp.latest_created_on END)            AS cad_3d_pt
+# MAGIC     FROM Gold_Product_Dev_Lakehouse.pd.gold_npd_skt_prod sp
+# MAGIC     WHERE sp.Department = 'CAD'
+# MAGIC       AND sp.`เลข_SKT` IS NOT NULL
+# MAGIC     GROUP BY sp.`เลข_SKT`
+# MAGIC ),
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- 5) Production stage timestamps (MST 8 + SPL 8)
+# MAGIC --    Strategy: use type_name='In location in' events (when a PRO
+# MAGIC --    ENTERED a stage), not modified_on. This sidesteps BC's
+# MAGIC --    close-out timestamp bump entirely — no close-out detection needed.
+# MAGIC --
+# MAGIC --    Join chain:
+# MAGIC --      gold_npd_sketch_mapping (sketch ↔ PRO)
+# MAGIC --        ↓
+# MAGIC --      gold_npd_prod_status     (PRO + operation, filter type='In location in')
+# MAGIC --        ↓
+# MAGIC --      gold_step_master_final   (machine_center / location → Key_Abbr stage label)
+# MAGIC --
+# MAGIC --    Then pivot Key_Abbr to columns.
+# MAGIC -- ============================================================
+# MAGIC prod_stage_events AS (
+# MAGIC     -- gold_npd_sketch_mapping has only `prod_order_no` (single col) + `MergedProd` (concat of all PROs with '/').
+# MAGIC     -- To match a sketch to ALL its PROs, match ps.`No.` against MergedProd's slash-separated tokens.
+# MAGIC     SELECT DISTINCT
+# MAGIC         sm.sketch_number,
+# MAGIC         ps.`No.`                                              AS pro_number,
+# MAGIC         ps.operation_no,
+# MAGIC         ps.created_on                                         AS event_at,    -- "entered stage" time
+# MAGIC         ps.machine_center_no,
+# MAGIC         ps.current_location_code,
+# MAGIC         sf.Department                                         AS step_dept,    -- 'MST' or 'SP' or 'CAD'
+# MAGIC         sf.Key_Abbr                                           AS stage_label   -- 'WH MST', 'ADN MST', 'WH SP', etc.
+# MAGIC     FROM Gold_Product_Dev_Lakehouse.pd.gold_npd_sketch_mapping sm
+# MAGIC     INNER JOIN Gold_Product_Dev_Lakehouse.pd.gold_npd_prod_status ps
+# MAGIC         -- Match against MergedProd (concat'd PRO list) using exact-token search:
+# MAGIC         -- '/' + MergedProd + '/' LIKE '%/' + ps.[No.] + '/%'
+# MAGIC         -- Guards against partial matches (e.g. 'WMT12' would not match 'WMT123').
+# MAGIC         ON CONCAT('/', sm.MergedProd, '/') LIKE CONCAT('%/', ps.`No.`, '/%')
+# MAGIC     INNER JOIN Gold_Product_Dev_Lakehouse.pd.gold_step_master_final sf
+# MAGIC         ON sf.Code = COALESCE(NULLIF(ps.machine_center_no, ''), ps.current_location_code)
+# MAGIC     WHERE ps.type_name = 'In location in'
+# MAGIC       AND sm.sketch_number IS NOT NULL
+# MAGIC       AND ps.`No.` IS NOT NULL
+# MAGIC       AND (ps.`No.` LIKE 'WMT%' OR ps.`No.` LIKE 'WSP%')
+# MAGIC ),
+# MAGIC 
+# MAGIC mst_stages AS (
+# MAGIC     SELECT
+# MAGIC         e.sketch_number,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'WH MST'  THEN e.event_at END) AS mst_wh,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'ADN MST' THEN e.event_at END) AS mst_adn,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'CAS MST' THEN e.event_at END) AS mst_cas,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'FL MST'  THEN e.event_at END) AS mst_fl,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'P-SET'   THEN e.event_at END) AS mst_pre_set,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'ENGRV'   THEN e.event_at END) AS mst_engr,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'SPR'     THEN e.event_at END) AS mst_sprue,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'R-MOLD'  THEN e.event_at END) AS mst_rub_mold,
+# MAGIC         COUNT(DISTINCT e.pro_number) FILTER (WHERE e.pro_number LIKE 'WMT%') AS mst_pro_count
+# MAGIC     FROM prod_stage_events e
+# MAGIC     WHERE e.step_dept = 'MST'
+# MAGIC     GROUP BY e.sketch_number
+# MAGIC ),
+# MAGIC 
+# MAGIC spl_stages AS (
+# MAGIC     SELECT
+# MAGIC         e.sketch_number,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'WH SP'   THEN e.event_at END) AS spl_wh,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'ADN SP'  THEN e.event_at END) AS spl_adm,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'CAS SP'  THEN e.event_at END) AS spl_cas,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'FIL'     THEN e.event_at END) AS spl_fil,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'SET'     THEN e.event_at END) AS spl_set,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'POL'     THEN e.event_at END) AS spl_pol,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'PLAT'    THEN e.event_at END) AS spl_plat,
+# MAGIC         MAX(CASE WHEN e.stage_label = 'QA'      THEN e.event_at END) AS spl_qa,
+# MAGIC         COUNT(DISTINCT e.pro_number) FILTER (WHERE e.pro_number LIKE 'WSP%') AS spl_pro_count
+# MAGIC     FROM prod_stage_events e
+# MAGIC     WHERE e.step_dept = 'SP'
+# MAGIC     GROUP BY e.sketch_number
+# MAGIC ),
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- 6) Assemble per-sketch row
+# MAGIC -- ============================================================
+# MAGIC assembled AS (
+# MAGIC     SELECT
+# MAGIC         a.*,
+# MAGIC 
+# MAGIC         -- Customer enrichment (best-effort match by name)
+# MAGIC         ci.customer_no,
+# MAGIC         ci.customer_abbr,
+# MAGIC         ci.cs_team,
+# MAGIC 
+# MAGIC         -- PROs + items
+# MAGIC         COALESCE(sp.fg_items,        array())          AS fg_items,
+# MAGIC         COALESCE(sp.master_pros,     array())          AS master_pros,
+# MAGIC         COALESCE(sp.sample_pros,     array())          AS sample_pros,
+# MAGIC         COALESCE(sp.master_items,    array())          AS master_items,
+# MAGIC         COALESCE(sp.sample_items,    array())          AS sample_items,
+# MAGIC         COALESCE(sp.linked_sos,      array())          AS linked_sos,
+# MAGIC         COALESCE(sp.has_master_pro,  false)            AS has_master_pro,
+# MAGIC         COALESCE(sp.has_sample_pro,  false)            AS has_sample_pro,
+# MAGIC 
+# MAGIC         -- CAD stages
+# MAGIC         cs.cad_bklg, cs.cad_asgn, cs.cad_mng_app, cs.cad_cus_app,
+# MAGIC         cs.cad_cus_rev, cs.cad_ready, cs.cad_3d_pt,
+# MAGIC 
+# MAGIC         -- MST stages (8)
+# MAGIC         ms.mst_wh, ms.mst_adn, ms.mst_cas, ms.mst_fl,
+# MAGIC         ms.mst_pre_set, ms.mst_engr, ms.mst_sprue, ms.mst_rub_mold,
+# MAGIC         COALESCE(ms.mst_pro_count, 0)                  AS mst_pro_count,
+# MAGIC 
+# MAGIC         -- SPL stages (8)
+# MAGIC         ss.spl_wh, ss.spl_adm, ss.spl_cas, ss.spl_fil,
+# MAGIC         ss.spl_set, ss.spl_pol, ss.spl_plat, ss.spl_qa,
+# MAGIC         COALESCE(ss.spl_pro_count, 0)                  AS spl_pro_count
+# MAGIC 
+# MAGIC     FROM active_sketches a
+# MAGIC     LEFT JOIN customer_info ci ON TRIM(a.customer_name_raw) = ci.customer_name_key
+# MAGIC     LEFT JOIN sketch_pros sp   ON a.sketch_number = sp.sketch_number
+# MAGIC     LEFT JOIN cad_stages cs    ON a.sketch_number = cs.sketch_number
+# MAGIC     LEFT JOIN mst_stages ms    ON a.sketch_number = ms.sketch_number
+# MAGIC     LEFT JOIN spl_stages ss    ON a.sketch_number = ss.sketch_number
+# MAGIC )
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- 7) Final: derive status, current_stage, days_in_stage
+# MAGIC -- ============================================================
+# MAGIC SELECT
+# MAGIC     -- Identity
+# MAGIC     sketch_number,
+# MAGIC     description,
+# MAGIC     submission_date,
+# MAGIC     customer_request_date,
+# MAGIC     promised_date,
+# MAGIC     cad_week, cus_req_week, pro_req_week, committed_week,
+# MAGIC     cropped_design_image_url,
+# MAGIC     additional_photo_url,
+# MAGIC     collection_id_name,
+# MAGIC     assigned_engineer_name,
+# MAGIC     estimated_development_time,
+# MAGIC     estimated_production_ready_time,
+# MAGIC     customer_target_price,
+# MAGIC     customer_design_number,
+# MAGIC     created_by_email,
+# MAGIC     sketch_status_name,
+# MAGIC     schedule_status,
+# MAGIC     customer_name_raw                     AS customer_name,
+# MAGIC 
+# MAGIC     -- Customer
+# MAGIC     customer_no,
+# MAGIC     customer_abbr,
+# MAGIC     cs_team,
+# MAGIC 
+# MAGIC     -- PROs and items
+# MAGIC     fg_items, master_pros, sample_pros, master_items, sample_items, linked_sos,
+# MAGIC     has_master_pro, has_sample_pro,
+# MAGIC     mst_pro_count, spl_pro_count,
+# MAGIC 
+# MAGIC     -- CAD stages (7)
+# MAGIC     cad_bklg, cad_asgn, cad_mng_app, cad_cus_app,
+# MAGIC     cad_cus_rev, cad_ready, cad_3d_pt,
+# MAGIC 
+# MAGIC     -- MST stages (8)
+# MAGIC     mst_wh, mst_adn, mst_cas, mst_fl,
+# MAGIC     mst_pre_set, mst_engr, mst_sprue, mst_rub_mold,
+# MAGIC 
+# MAGIC     -- SPL stages (8)
+# MAGIC     spl_wh, spl_adm, spl_cas, spl_fil,
+# MAGIC     spl_set, spl_pol, spl_plat, spl_qa,
+# MAGIC 
+# MAGIC     -- Derived: latest filled timestamp across all stages
+# MAGIC     GREATEST(
+# MAGIC         COALESCE(spl_qa,    TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(spl_plat,  TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(spl_pol,   TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(spl_set,   TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(spl_fil,   TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(spl_cas,   TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(spl_adm,   TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(spl_wh,    TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(mst_rub_mold, TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(mst_sprue,    TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(mst_engr,     TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(mst_pre_set,  TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(mst_fl,       TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(mst_cas,      TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(mst_adn,      TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(mst_wh,       TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(cad_3d_pt,    TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(cad_ready,    TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(cad_cus_rev,  TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(cad_cus_app,  TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(cad_mng_app,  TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(cad_asgn,     TIMESTAMP '1900-01-01'),
+# MAGIC         COALESCE(cad_bklg,     TIMESTAMP '1900-01-01')
+# MAGIC     )                                     AS last_stage_at,
+# MAGIC 
+# MAGIC     -- Derived: current_stage (last filled stage label, walking band priority SPL > MST > CAD)
+# MAGIC     CASE
+# MAGIC         WHEN spl_qa       IS NOT NULL THEN 'QA'
+# MAGIC         WHEN spl_plat     IS NOT NULL THEN 'PLAT'
+# MAGIC         WHEN spl_pol      IS NOT NULL THEN 'POL'
+# MAGIC         WHEN spl_set      IS NOT NULL THEN 'SET'
+# MAGIC         WHEN spl_fil      IS NOT NULL THEN 'FIL'
+# MAGIC         WHEN spl_cas      IS NOT NULL THEN 'CAS SP'
+# MAGIC         WHEN spl_adm      IS NOT NULL THEN 'ADN SP'
+# MAGIC         WHEN spl_wh       IS NOT NULL THEN 'WH SP'
+# MAGIC         WHEN mst_rub_mold IS NOT NULL THEN 'R-MOLD'
+# MAGIC         WHEN mst_sprue    IS NOT NULL THEN 'SPR'
+# MAGIC         WHEN mst_engr     IS NOT NULL THEN 'ENGRV'
+# MAGIC         WHEN mst_pre_set  IS NOT NULL THEN 'P-SET'
+# MAGIC         WHEN mst_fl       IS NOT NULL THEN 'FL MST'
+# MAGIC         WHEN mst_cas      IS NOT NULL THEN 'CAS MST'
+# MAGIC         WHEN mst_adn      IS NOT NULL THEN 'ADN MST'
+# MAGIC         WHEN mst_wh       IS NOT NULL THEN 'WH MST'
+# MAGIC         WHEN cad_3d_pt    IS NOT NULL THEN '3D PT'
+# MAGIC         WHEN cad_ready    IS NOT NULL THEN 'READY'
+# MAGIC         WHEN cad_cus_rev  IS NOT NULL THEN 'CUS REV'
+# MAGIC         WHEN cad_cus_app  IS NOT NULL THEN 'CUS APP'
+# MAGIC         WHEN cad_mng_app  IS NOT NULL THEN 'MNG APP'
+# MAGIC         WHEN cad_asgn     IS NOT NULL THEN 'ASGN'
+# MAGIC         WHEN cad_bklg     IS NOT NULL THEN 'CAD BKLG'
+# MAGIC         ELSE 'CAD BKLG'
+# MAGIC     END                                   AS current_stage,
+# MAGIC 
+# MAGIC     -- Derived: status_base (cad / mst / spl / dn)
+# MAGIC     CASE
+# MAGIC         WHEN spl_qa IS NOT NULL THEN 'dn'
+# MAGIC         WHEN (spl_wh IS NOT NULL OR spl_adm IS NOT NULL OR spl_cas IS NOT NULL 
+# MAGIC               OR spl_fil IS NOT NULL OR spl_set IS NOT NULL OR spl_pol IS NOT NULL 
+# MAGIC               OR spl_plat IS NOT NULL) THEN 'spl'
+# MAGIC         WHEN (mst_wh IS NOT NULL OR mst_adn IS NOT NULL OR mst_cas IS NOT NULL 
+# MAGIC               OR mst_fl IS NOT NULL OR mst_pre_set IS NOT NULL OR mst_engr IS NOT NULL 
+# MAGIC               OR mst_sprue IS NOT NULL OR mst_rub_mold IS NOT NULL) THEN 'mst'
+# MAGIC         ELSE 'cad'
+# MAGIC     END                                   AS status_base,
+# MAGIC 
+# MAGIC     -- Derived: stage counts for KPI cards (X / 8 of master, Y / 8 of sample, etc.)
+# MAGIC     (CASE WHEN cad_bklg    IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN cad_asgn    IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN cad_mng_app IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN cad_cus_app IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN cad_cus_rev IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN cad_ready   IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN cad_3d_pt   IS NOT NULL THEN 1 ELSE 0 END
+# MAGIC     )                                     AS cad_stages_filled,
+# MAGIC 
+# MAGIC     (CASE WHEN mst_wh       IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN mst_adn      IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN mst_cas      IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN mst_fl       IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN mst_pre_set  IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN mst_engr     IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN mst_sprue    IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN mst_rub_mold IS NOT NULL THEN 1 ELSE 0 END
+# MAGIC     )                                     AS mst_stages_filled,
+# MAGIC 
+# MAGIC     (CASE WHEN spl_wh   IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN spl_adm  IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN spl_cas  IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN spl_fil  IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN spl_set  IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN spl_pol  IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN spl_plat IS NOT NULL THEN 1 ELSE 0 END +
+# MAGIC      CASE WHEN spl_qa   IS NOT NULL THEN 1 ELSE 0 END
+# MAGIC     )                                     AS spl_stages_filled,
+# MAGIC 
+# MAGIC     -- Derived: days since last activity
+# MAGIC     CASE
+# MAGIC         WHEN GREATEST(
+# MAGIC                 COALESCE(spl_qa, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_plat, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_pol, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_set, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_fil, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_cas, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_adm, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_wh, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_rub_mold, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_sprue, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_engr, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_pre_set, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_fl, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_cas, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_adn, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_wh, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_3d_pt, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_ready, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_cus_rev, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_cus_app, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_mng_app, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_asgn, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_bklg, TIMESTAMP '1900-01-01')
+# MAGIC             ) > TIMESTAMP '1900-01-01'
+# MAGIC         THEN datediff(current_date(), to_date(GREATEST(
+# MAGIC                 COALESCE(spl_qa, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_plat, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_pol, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_set, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_fil, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_cas, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_adm, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(spl_wh, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_rub_mold, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_sprue, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_engr, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_pre_set, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_fl, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_cas, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_adn, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(mst_wh, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_3d_pt, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_ready, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_cus_rev, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_cus_app, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_mng_app, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_asgn, TIMESTAMP '1900-01-01'),
+# MAGIC                 COALESCE(cad_bklg, TIMESTAMP '1900-01-01')
+# MAGIC             )))
+# MAGIC         ELSE NULL
+# MAGIC     END                                   AS days_in_stage,
+# MAGIC 
+# MAGIC     -- Derived: total elapsed since submission
+# MAGIC     datediff(current_date(), submission_date) AS total_elapsed_days,
+# MAGIC 
+# MAGIC     -- Metadata
+# MAGIC     sketch_created_on,
+# MAGIC     sketch_modified_on,
+# MAGIC     current_timestamp()                   AS table_last_updated
+# MAGIC 
+# MAGIC FROM assembled
+# MAGIC ;
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- QUALITY CHECKS (run as separate cell after CREATE)
+# MAGIC -- ============================================================
+# MAGIC -- 1. Total active sketches (should match gold_cad_requests filter)
+# MAGIC -- SELECT COUNT(*) AS active_sketches FROM Gold_Product_Dev_Lakehouse.pd.gold_npd_report_overview;
+# MAGIC 
+# MAGIC -- 2. Status distribution (sanity check)
+# MAGIC -- SELECT status_base, COUNT(*) AS n,
+# MAGIC --        ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct
+# MAGIC -- FROM Gold_Product_Dev_Lakehouse.pd.gold_npd_report_overview
+# MAGIC -- GROUP BY status_base ORDER BY n DESC;
+# MAGIC 
+# MAGIC -- 3. SK-4878 verification (canary)
+# MAGIC -- SELECT sketch_number, description, status_base, current_stage, days_in_stage,
+# MAGIC --        cad_stages_filled, mst_stages_filled, spl_stages_filled,
+# MAGIC --        master_pros, sample_pros
+# MAGIC -- FROM Gold_Product_Dev_Lakehouse.pd.gold_npd_report_overview
+# MAGIC -- WHERE sketch_number = 'SK-4878';
+# MAGIC 
+# MAGIC -- 4. Customer enrichment hit rate
+# MAGIC -- SELECT
+# MAGIC --   COUNT(*) AS total,
+# MAGIC --   SUM(CASE WHEN customer_abbr IS NULL THEN 1 ELSE 0 END) AS missing_abbr,
+# MAGIC --   SUM(CASE WHEN cs_team IS NULL THEN 1 ELSE 0 END) AS missing_cs_team
+# MAGIC -- FROM Gold_Product_Dev_Lakehouse.pd.gold_npd_report_overview;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# MARKDOWN ********************
+
+# # Test
+
+# CELL ********************
+
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }

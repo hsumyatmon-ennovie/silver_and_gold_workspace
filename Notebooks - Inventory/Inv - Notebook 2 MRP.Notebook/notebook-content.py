@@ -17,6 +17,9 @@
 # META         },
 # META         {
 # META           "id": "9c785c00-bff3-4379-a2f9-c17fd9df2974"
+# META         },
+# META         {
+# META           "id": "1d620310-5acc-4534-93f9-f52f082a1887"
 # META         }
 # META       ]
 # META     },
@@ -10950,114 +10953,3 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MARKDOWN ********************
 
 # # Verification (VC1-VC8)
-
-# CELL ********************
-
-# MAGIC %%sql
-# MAGIC -- =====================================================================
-# MAGIC -- 📤 Expanded sample from gold_pur_po_timing v2
-# MAGIC --    Covers wider scenarios to populate dashboard with real data
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC WITH ranked AS (
-# MAGIC     SELECT
-# MAGIC         *,
-# MAGIC         -- Sort by timing-specific priority
-# MAGIC         ROW_NUMBER() OVER (
-# MAGIC             PARTITION BY timing_status
-# MAGIC             ORDER BY 
-# MAGIC                 -- For NO_MRP: spread across value tiers, not just top
-# MAGIC                 CASE 
-# MAGIC                     WHEN timing_status = 'NO_MRP_TRIGGER' 
-# MAGIC                         THEN ABS(line_value_thb - 100000)  -- prefer mid-value items
-# MAGIC                     ELSE -COALESCE(line_value_thb, 0)       -- others by value desc
-# MAGIC                 END
-# MAGIC         ) AS rn_in_bucket,
-# MAGIC         -- Rank within status
-# MAGIC         ROW_NUMBER() OVER (
-# MAGIC             PARTITION BY po_status
-# MAGIC             ORDER BY COALESCE(line_value_thb, 0) DESC
-# MAGIC         ) AS rn_in_status
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_pur_po_timing
-# MAGIC )
-# MAGIC SELECT
-# MAGIC     item_no,
-# MAGIC     po_no,
-# MAGIC     line_no,
-# MAGIC     po_status,
-# MAGIC     po_opened_date,
-# MAGIC     expected_receipt,
-# MAGIC     promised_receipt,
-# MAGIC     outstanding_qty_uom1,
-# MAGIC     outstanding_qty_uom2,
-# MAGIC     po_uom,
-# MAGIC     unit_cost,
-# MAGIC     line_value_thb,
-# MAGIC     vendor_no,
-# MAGIC     vendor_name,
-# MAGIC     description,
-# MAGIC     item_category,
-# MAGIC     archetype,
-# MAGIC     is_critical,
-# MAGIC     has_dq_issue,
-# MAGIC     mrp_suggested_date,
-# MAGIC     mrp_total_to_order_uom1,
-# MAGIC     mrp_total_to_order_uom2,
-# MAGIC     has_mrp_trigger,
-# MAGIC     mrp_urgency,
-# MAGIC     days_po_after_mrp_suggest,
-# MAGIC     days_to_receipt,
-# MAGIC     lead_time_days_actual,
-# MAGIC     timing_status
-# MAGIC FROM ranked
-# MAGIC WHERE
-# MAGIC     -- ALL PO_LATE (if any) — keep all because rare/important
-# MAGIC     (timing_status = 'PO_LATE')
-# MAGIC     
-# MAGIC     -- Up to 4 PO_BEFORE_MRP
-# MAGIC     OR (timing_status = 'PO_BEFORE_MRP' AND rn_in_bucket <= 4)
-# MAGIC     
-# MAGIC     -- Up to 2 PO_VERY_EARLY
-# MAGIC     OR (timing_status = 'PO_VERY_EARLY' AND rn_in_bucket <= 2)
-# MAGIC     
-# MAGIC     -- Up to 2 ON_TIME
-# MAGIC     OR (timing_status = 'ON_TIME' AND rn_in_bucket <= 2)
-# MAGIC     
-# MAGIC     -- 8 NO_MRP_TRIGGER (across value tiers)
-# MAGIC     OR (timing_status = 'NO_MRP_TRIGGER' AND rn_in_bucket <= 8)
-# MAGIC     
-# MAGIC     -- Make sure we include Open + Pending Approval examples regardless of timing
-# MAGIC     OR (po_status = 'Open' AND rn_in_status <= 3)
-# MAGIC     OR (po_status = 'Pending Approval' AND rn_in_status <= 2)
-# MAGIC     
-# MAGIC     -- Include receiving-this-week items (≤ 7 days)
-# MAGIC     OR (days_to_receipt >= 0 AND days_to_receipt <= 7 AND rn_in_bucket <= 5)
-# MAGIC     
-# MAGIC     -- Include overdue receipt items
-# MAGIC     OR (days_to_receipt < 0 AND rn_in_bucket <= 3)
-# MAGIC ORDER BY
-# MAGIC     CASE timing_status
-# MAGIC         WHEN 'PO_LATE' THEN 1
-# MAGIC         WHEN 'PO_BEFORE_MRP' THEN 2
-# MAGIC         WHEN 'PO_VERY_EARLY' THEN 3
-# MAGIC         WHEN 'ON_TIME' THEN 4
-# MAGIC         WHEN 'NO_MRP_TRIGGER' THEN 5
-# MAGIC     END,
-# MAGIC     line_value_thb DESC;
-
-# METADATA ********************
-
-# META {
-# META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# CELL ********************
-
-
-# METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }

@@ -2212,22 +2212,18 @@ if not spark.catalog.tableExists(target_tbl):
 # MAGIC         po.`Shortcut Dimension 2 Code` AS po_global_dim_2
 # MAGIC     FROM Silver_BC_Lakehouse.bc.`Production Order` po
 # MAGIC     LEFT JOIN (
-# MAGIC         -- MAX(scheduled_end_date) within the latest engine_run per prod_order_no
-# MAGIC         SELECT
-# MAGIC             prod_order_no,
-# MAGIC             MAX(scheduled_end_date) AS planned_prod_order_due_date
+# MAGIC         SELECT prod_order_no, planned_prod_order_due_date
 # MAGIC         FROM (
 # MAGIC             SELECT
 # MAGIC                 prod_order_no,
-# MAGIC                 scheduled_end_date,
-# MAGIC                 DENSE_RANK() OVER (
+# MAGIC                 prod_order_due_date AS planned_prod_order_due_date,
+# MAGIC                 ROW_NUMBER() OVER (
 # MAGIC                     PARTITION BY prod_order_no
 # MAGIC                     ORDER BY engine_run_ts DESC
-# MAGIC                 ) AS run_rank
-# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
+# MAGIC                 ) AS rn
+# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_operation_due
 # MAGIC         )
-# MAGIC         WHERE run_rank = 1
-# MAGIC         GROUP BY prod_order_no
+# MAGIC         WHERE rn = 1
 # MAGIC     ) pod ON pod.prod_order_no = po.`No.`
 # MAGIC ),
 # MAGIC 
@@ -3692,19 +3688,31 @@ print("Rows written:", df.count())
 
 # MAGIC %%sql
 # MAGIC -- ============================================================
-# MAGIC -- gold_consumption v2 — Active PROs only + drift severity flags
+# MAGIC -- gold_consumption v2.1 — PC-first + L4 component-removed
 # MAGIC -- Owner: Phloy / DPA team
 # MAGIC --
-# MAGIC -- Changes from v1 (PRO-version-aware):
-# MAGIC --   1. กรอง Status = 'Finished' ออก (ไม่กระทบ ops, ทำให้ NO_BOM_MATCH 25% noise หายไป)
-# MAGIC --   2. เพิ่ม drift_level (L1 / L2 / L3 / NONE) สำหรับ rule-based alerting
-# MAGIC --   3. เพิ่ม is_casting_pro flag เผื่อใช้ filter ใน downstream
+# MAGIC -- Changes from v2 (Bug 5 fix):
+# MAGIC --   1. exp1 / exp2 ดึงจาก Prod Order Component เสมอ
+# MAGIC --      = snapshot ตอนเปิด PRO ตาม BC business rule
+# MAGIC --      (version ที่ใช้ consump = version ตอนเปิด PRO)
+# MAGIC --   2. ค่าจาก BOM master ย้ายไปเป็นคอลัมน์ comparison
+# MAGIC --      → exp1_from_bom_current, exp2_from_bom_current
+# MAGIC --   3. เพิ่ม L4_COMPONENT_REMOVED: BOM master ลบ component
+# MAGIC --      หลังเปิด PRO (silent drift, 5,126 rows ที่ v2 ปกปิด)
+# MAGIC --   4. เพิ่ม bom_drift_status: MATCH / BOM_UPDATED /
+# MAGIC --      COMPONENT_REMOVED_FROM_BOM
+# MAGIC --   5. Legacy alias columns ยังคงอยู่ (ไม่ break downstream):
+# MAGIC --      - exp1_from_pc_original  → alias ของ exp1
+# MAGIC --      - exp2_from_pc_original  → alias ของ exp2
+# MAGIC --      - exp_source_status      → derived จาก bom_drift_status
 # MAGIC --
-# MAGIC -- Drift levels:
-# MAGIC --   L1_DRIFT       — PCS drift > 0.5 (PC ค่าเพี้ยน, refresh ได้)
-# MAGIC --   L2_PC_ZEROED   — PC = 0 ทั้งที่ BOM > 0 (อันตราย: warehouse ไม่จ่ายของ)
-# MAGIC --   L3_BOM_ZEROED  — BOM = 0 ทั้งที่ PC > 0 (BOM data quality issue)
-# MAGIC --   NONE           — ไม่มี drift หรือ BOM ไม่ match
+# MAGIC -- Drift levels (จากอันตรายสุด → น้อยสุด):
+# MAGIC --   L4_COMPONENT_REMOVED — BOM master ลบ component หลังเปิด PRO
+# MAGIC --                          (silent drift, ATP/MRP มองไม่เห็น demand)
+# MAGIC --   L3_BOM_ZEROED        — BOM master mark qty=0 แต่ PC > 0
+# MAGIC --   L2_PC_ZEROED         — PC = 0 แต่ BOM > 0 (warehouse ไม่จ่าย)
+# MAGIC --   L1_DRIFT             — BOM master ถูกแก้ค่า qty/scrap หลังเปิด PRO
+# MAGIC --   NONE                 — ไม่ drift หรือ PRO ไม่มี BOM No.
 # MAGIC --
 # MAGIC -- วิธีรันใน Fabric notebook:
 # MAGIC --   1. แต่ละ CELL ด้านล่าง = Spark SQL cell แยกกัน
@@ -3766,23 +3774,19 @@ print("Rows written:", df.count())
 # MAGIC     ),
 # MAGIC 
 # MAGIC     POD_LATEST AS (
-# MAGIC         -- engine-anchored due date: MAX(scheduled_end_date) within the latest
-# MAGIC         -- engine_run per prod_order_no, from planning_forward_schedule.
-# MAGIC         SELECT
-# MAGIC             prod_order_no,
-# MAGIC             MAX(scheduled_end_date) AS planned_prod_order_due_date
+# MAGIC         -- engine-anchored due date: one row per prod_order_no, latest engine_run
+# MAGIC         SELECT prod_order_no, planned_prod_order_due_date
 # MAGIC         FROM (
 # MAGIC             SELECT
 # MAGIC                 prod_order_no,
-# MAGIC                 scheduled_end_date,
-# MAGIC                 DENSE_RANK() OVER (
+# MAGIC                 prod_order_due_date AS planned_prod_order_due_date,
+# MAGIC                 ROW_NUMBER() OVER (
 # MAGIC                     PARTITION BY prod_order_no
 # MAGIC                     ORDER BY engine_run_ts DESC
-# MAGIC                 ) AS run_rank
-# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_forward_schedule
+# MAGIC                 ) AS rn
+# MAGIC             FROM Gold_Production_Lakehouse.prod.planning_operation_due
 # MAGIC         )
-# MAGIC         WHERE run_rank = 1
-# MAGIC         GROUP BY prod_order_no
+# MAGIC         WHERE rn = 1
 # MAGIC     ),
 # MAGIC 
 # MAGIC     CTE AS (
@@ -3801,55 +3805,104 @@ print("Rows written:", df.count())
 # MAGIC             pc.`Quantity per` AS QtyPer,
 # MAGIC             pc.`Units per_DU_TSL` AS ComponentUnitsPer_DU_TSL,
 # MAGIC 
-# MAGIC             -- ===== EXP1 / EXP2: ดึงจาก BOM ตาม version ที่ PRO ระบุ =====
-# MAGIC             CAST(
-# MAGIC                 pl.`Quantity` * bom.bom_quantity_per * (1 + bom.bom_scrap_pct / 100)
-# MAGIC                 AS DECIMAL(18, 5)
-# MAGIC             ) AS exp1,
-# MAGIC 
+# MAGIC             -- ============================================
+# MAGIC             -- EXP1 / EXP2: ดึงจาก PC เสมอ (source of truth)
+# MAGIC             -- = snapshot ตอนเปิด PRO ตาม BC business rule
+# MAGIC             -- "version ที่ใช้ consump = version ตอนเปิด PRO"
+# MAGIC             -- ============================================
+# MAGIC             CAST(pc.`Expected Quantity`     AS DECIMAL(18, 5))  AS exp1,
 # MAGIC             pc.`Remaining Quantity` AS rem1,
 # MAGIC             COALESCE(ile.con1, 0) AS con1,
 # MAGIC 
-# MAGIC             CAST(
-# MAGIC                 pl.`Quantity` * bom.bom_units_per * (1 + bom.bom_scrap_pct / 100)
-# MAGIC                 AS DECIMAL(18, 5)
-# MAGIC             ) AS exp2,
+# MAGIC             CAST(pc.`Expected Units_DU_TSL` AS DECIMAL(18, 5))  AS exp2,
 # MAGIC             COALESCE(ile.con2, 0) AS con2,
 # MAGIC 
-# MAGIC             -- ===== Audit: BOM source =====
+# MAGIC             -- ============================================
+# MAGIC             -- BOM master comparison (drift detection)
+# MAGIC             -- ============================================
 # MAGIC             pl.`Production BOM No.`                          AS pl_production_bom_no,
 # MAGIC             COALESCE(pl.`Production BOM Version Code`, '')   AS pl_bom_version_code,
 # MAGIC             bom.bom_quantity_per                             AS bom_quantity_per,
 # MAGIC             bom.bom_units_per                                AS bom_units_per,
 # MAGIC             bom.bom_scrap_pct                                AS bom_scrap_pct,
+# MAGIC 
+# MAGIC             -- "ถ้าใช้ BOM master ปัจจุบัน" จะได้เท่าไร (NULL ถ้า BOM JOIN miss)
+# MAGIC             CAST(
+# MAGIC                 pl.`Quantity` * bom.bom_quantity_per * (1 + bom.bom_scrap_pct / 100)
+# MAGIC                 AS DECIMAL(18, 5)
+# MAGIC             ) AS exp1_from_bom_current,
+# MAGIC 
+# MAGIC             CAST(
+# MAGIC                 pl.`Quantity` * bom.bom_units_per * (1 + bom.bom_scrap_pct / 100)
+# MAGIC                 AS DECIMAL(18, 5)
+# MAGIC             ) AS exp2_from_bom_current,
+# MAGIC 
+# MAGIC             -- ============================================
+# MAGIC             -- bom_drift_status: BOM master ถูกแก้หลังเปิด PRO ไหม
+# MAGIC             -- ============================================
+# MAGIC             CASE
+# MAGIC                 WHEN bom.production_bom_no IS NULL
+# MAGIC                      AND pl.`Production BOM No.` IS NOT NULL
+# MAGIC                      AND pl.`Production BOM No.` <> ''
+# MAGIC                     THEN 'COMPONENT_REMOVED_FROM_BOM'
+# MAGIC                 WHEN bom.production_bom_no IS NULL
+# MAGIC                     THEN 'NO_BOM_REF'
+# MAGIC                 WHEN ABS(
+# MAGIC                         CAST(pl.`Quantity` * bom.bom_units_per * (1 + bom.bom_scrap_pct / 100) AS DECIMAL(18,5))
+# MAGIC                         - COALESCE(pc.`Expected Units_DU_TSL`, 0)
+# MAGIC                      ) > 0.5
+# MAGIC                     THEN 'BOM_UPDATED'
+# MAGIC                 ELSE 'MATCH'
+# MAGIC             END                                              AS bom_drift_status,
+# MAGIC 
+# MAGIC             -- ============================================
+# MAGIC             -- drift_level: rule-based severity
+# MAGIC             -- ============================================
+# MAGIC             CASE
+# MAGIC                 -- L4: BOM master ลบ component ตัวนี้หลังเปิด PRO
+# MAGIC                 -- (silent drift — ATP/MRP มองไม่เห็น demand)
+# MAGIC                 WHEN bom.production_bom_no IS NULL
+# MAGIC                      AND (COALESCE(pc.`Expected Quantity`, 0) > 0
+# MAGIC                           OR COALESCE(pc.`Expected Units_DU_TSL`, 0) > 0)
+# MAGIC                      AND pl.`Production BOM No.` IS NOT NULL
+# MAGIC                      AND pl.`Production BOM No.` <> ''
+# MAGIC                     THEN 'L4_COMPONENT_REMOVED'
+# MAGIC 
+# MAGIC                 -- ถ้า PRO ไม่มี BOM No. เลย ไม่นับว่า drift
+# MAGIC                 WHEN bom.production_bom_no IS NULL
+# MAGIC                     THEN 'NONE'
+# MAGIC 
+# MAGIC                 -- L3: BOM master mark qty=0 แต่ PC ยังมี expected > 0
+# MAGIC                 WHEN COALESCE(bom.bom_units_per, 0) = 0
+# MAGIC                      AND COALESCE(pc.`Expected Units_DU_TSL`, 0) > 0
+# MAGIC                     THEN 'L3_BOM_ZEROED'
+# MAGIC 
+# MAGIC                 -- L2: PC = 0 แต่ BOM > 0 (warehouse ไม่จ่ายของ)
+# MAGIC                 WHEN COALESCE(pc.`Expected Units_DU_TSL`, 0) = 0
+# MAGIC                      AND COALESCE(bom.bom_units_per, 0) > 0
+# MAGIC                     THEN 'L2_PC_ZEROED'
+# MAGIC 
+# MAGIC                 -- L1: BOM master ถูกแก้ค่า qty/scrap หลังเปิด PRO
+# MAGIC                 WHEN ABS(
+# MAGIC                         CAST(pl.`Quantity` * bom.bom_units_per * (1 + bom.bom_scrap_pct / 100) AS DECIMAL(18,5))
+# MAGIC                         - COALESCE(pc.`Expected Units_DU_TSL`, 0)
+# MAGIC                      ) > 0.5
+# MAGIC                     THEN 'L1_DRIFT'
+# MAGIC 
+# MAGIC                 ELSE 'NONE'
+# MAGIC             END                                              AS drift_level,
+# MAGIC 
+# MAGIC             -- ============================================
+# MAGIC             -- LEGACY ALIAS COLUMNS (preserved for downstream)
+# MAGIC             -- ============================================
+# MAGIC             CAST(pc.`Expected Quantity`     AS DECIMAL(18, 5))  AS exp1_from_pc_original,
+# MAGIC             CAST(pc.`Expected Units_DU_TSL` AS DECIMAL(18, 5))  AS exp2_from_pc_original,
 # MAGIC             CASE
 # MAGIC                 WHEN bom.production_bom_no IS NULL THEN 'NO_BOM_MATCH'
 # MAGIC                 ELSE 'BOM_MATCHED'
 # MAGIC             END                                              AS exp_source_status,
 # MAGIC 
-# MAGIC             -- ===== Audit: ค่าเดิมจาก PRO Component =====
-# MAGIC             pc.`Expected Quantity`                           AS exp1_from_pc_original,
-# MAGIC             pc.`Expected Units_DU_TSL`                       AS exp2_from_pc_original,
-# MAGIC 
-# MAGIC             -- ===== NEW: drift_level =====
-# MAGIC             -- L3: BOM = 0 แต่ PC > 0  → BOM data quality issue
-# MAGIC             -- L2: PC = 0 แต่ BOM > 0  → warehouse ไม่จ่ายของ (อันตรายสุด)
-# MAGIC             -- L1: PCS drift > 0.5 (จับเฉพาะ drift จริง ไม่ใช่ rounding)
-# MAGIC             -- NONE: ไม่ drift หรือ BOM ไม่ match
-# MAGIC             CASE
-# MAGIC                 WHEN bom.production_bom_no IS NULL                                 THEN 'NONE'
-# MAGIC                 WHEN COALESCE(bom.bom_units_per, 0) = 0
-# MAGIC                      AND COALESCE(pc.`Expected Units_DU_TSL`, 0) > 0               THEN 'L3_BOM_ZEROED'
-# MAGIC                 WHEN COALESCE(pc.`Expected Units_DU_TSL`, 0) = 0
-# MAGIC                      AND COALESCE(bom.bom_units_per, 0) > 0                        THEN 'L2_PC_ZEROED'
-# MAGIC                 WHEN ABS(
-# MAGIC                         CAST(pl.`Quantity` * bom.bom_units_per * (1 + bom.bom_scrap_pct / 100) AS DECIMAL(18,5))
-# MAGIC                         - COALESCE(pc.`Expected Units_DU_TSL`, 0)
-# MAGIC                      ) > 0.5                                                        THEN 'L1_DRIFT'
-# MAGIC                 ELSE 'NONE'
-# MAGIC             END                                              AS drift_level,
-# MAGIC 
-# MAGIC             -- ===== NEW: is_casting_pro flag =====
+# MAGIC             -- is_casting_pro
 # MAGIC             CASE
 # MAGIC                 WHEN pl.`Prod. Order No.` LIKE 'CAS%' THEN true
 # MAGIC                 ELSE false
@@ -3883,8 +3936,7 @@ print("Rows written:", df.count())
 # MAGIC                 OVER (PARTITION BY pl.`Prod. Order No.`) AS DATE
 # MAGIC             ) AS FG_Startdate,
 # MAGIC 
-# MAGIC             -- FG_duedate now coalesces the engine-anchored planning value with
-# MAGIC             -- the BC line-10000 due date so planning takes precedence.
+# MAGIC             -- FG_duedate: engine-anchored planning value preferred over BC line-10000 due date
 # MAGIC             COALESCE(
 # MAGIC                 MAX(pod.planned_prod_order_due_date) OVER (PARTITION BY pl.`Prod. Order No.`),
 # MAGIC                 MAX(CASE WHEN pl.`Line No.` = 10000 THEN pl.`Due Date` END) OVER (PARTITION BY pl.`Prod. Order No.`)
@@ -3918,7 +3970,6 @@ print("Rows written:", df.count())
 # MAGIC 
 # MAGIC         -- ============================================
 # MAGIC         -- ตัด Finished PROs ออก
-# MAGIC         -- (Phloy: PROs ที่ผลิตเสร็จแล้วไม่กระทบ ops)
 # MAGIC         -- ============================================
 # MAGIC         WHERE pl.`Status` <> 'Finished'
 # MAGIC     )
@@ -3928,63 +3979,98 @@ print("Rows written:", df.count())
 # MAGIC 
 # MAGIC 
 # MAGIC -- ============================================================
-# MAGIC -- CELL C — Validation: row count + match rate
+# MAGIC -- CELL C — Validation: row count + drift distribution
 # MAGIC -- ============================================================
 # MAGIC SELECT
 # MAGIC     Status,
-# MAGIC     exp_source_status,
+# MAGIC     bom_drift_status,
 # MAGIC     drift_level,
 # MAGIC     COUNT(*)                           AS row_count,
 # MAGIC     COUNT(DISTINCT ProdOrderNo)        AS distinct_pros
 # MAGIC FROM `Gold_Inventory_Lakehouse`.`inv`.`gold_consumption`
-# MAGIC GROUP BY Status, exp_source_status, drift_level
-# MAGIC ORDER BY Status, exp_source_status, drift_level;
+# MAGIC GROUP BY Status, bom_drift_status, drift_level
+# MAGIC ORDER BY Status, bom_drift_status, drift_level;
 # MAGIC 
 # MAGIC 
 # MAGIC -- ============================================================
-# MAGIC -- CELL D — Drift summary (ใช้แทน WHERE ABS(diff) > 0.5 เดิม)
+# MAGIC -- CELL D — Drift summary (รวม L4 แล้ว)
 # MAGIC -- ============================================================
 # MAGIC SELECT
 # MAGIC     drift_level,
 # MAGIC     COUNT(*)                           AS row_count,
 # MAGIC     COUNT(DISTINCT ProdOrderNo)        AS distinct_pros,
 # MAGIC     COUNT(DISTINCT ComponentItemNo)    AS distinct_components,
+# MAGIC     SUM(CASE WHEN CompletelyPicked = 1 THEN 1 ELSE 0 END) AS picked_count,
 # MAGIC     ROUND(SUM(CASE
-# MAGIC         WHEN drift_level <> 'NONE' THEN ABS(exp2 - exp2_from_pc_original)
-# MAGIC         ELSE 0 END), 2)                AS total_pcs_drift
+# MAGIC         WHEN drift_level = 'L1_DRIFT'
+# MAGIC             THEN ABS(exp2_from_bom_current - exp2)
+# MAGIC         ELSE 0 END), 2)                AS total_pcs_drift_l1
 # MAGIC FROM `Gold_Inventory_Lakehouse`.`inv`.`gold_consumption`
 # MAGIC WHERE drift_level <> 'NONE'
+# MAGIC   AND NOT is_casting_pro
 # MAGIC GROUP BY drift_level
 # MAGIC ORDER BY
 # MAGIC     CASE drift_level
-# MAGIC         WHEN 'L3_BOM_ZEROED' THEN 1
-# MAGIC         WHEN 'L2_PC_ZEROED' THEN 2
-# MAGIC         WHEN 'L1_DRIFT'     THEN 3
-# MAGIC         ELSE 4
+# MAGIC         WHEN 'L4_COMPONENT_REMOVED' THEN 1
+# MAGIC         WHEN 'L3_BOM_ZEROED'        THEN 2
+# MAGIC         WHEN 'L2_PC_ZEROED'         THEN 3
+# MAGIC         WHEN 'L1_DRIFT'             THEN 4
+# MAGIC         ELSE 5
 # MAGIC     END;
 # MAGIC 
 # MAGIC 
 # MAGIC -- ============================================================
-# MAGIC -- CELL E — Spot check WRO260303649 / FOS-000010-SLV
+# MAGIC -- CELL E — Spot check WRO260400468 / RO-BT-000082
+# MAGIC -- ควรเห็น exp1=10, exp2=0, drift_level=L4_COMPONENT_REMOVED
 # MAGIC -- ============================================================
 # MAGIC SELECT
 # MAGIC     Status,
 # MAGIC     ProdOrderNo,
 # MAGIC     ComponentItemNo,
 # MAGIC     pl_bom_version_code,
+# MAGIC     bom_quantity_per,
 # MAGIC     bom_units_per,
 # MAGIC     ComponentUnitsPer_DU_TSL              AS pc_pcs_per,
-# MAGIC     exp2                                  AS exp2_from_bom,
-# MAGIC     exp2_from_pc_original                 AS exp2_from_pc,
-# MAGIC     (exp2 - exp2_from_pc_original)        AS exp2_diff,
-# MAGIC     drift_level
+# MAGIC     exp1,
+# MAGIC     exp2,
+# MAGIC     exp1_from_bom_current,
+# MAGIC     exp2_from_bom_current,
+# MAGIC     con1,
+# MAGIC     con2,
+# MAGIC     bom_drift_status,
+# MAGIC     drift_level,
+# MAGIC     CompletelyPicked
 # MAGIC FROM `Gold_Inventory_Lakehouse`.`inv`.`gold_consumption`
-# MAGIC WHERE ProdOrderNo = 'WRO260303649'
-# MAGIC   AND ComponentItemNo = 'FOS-000010-SLV';
+# MAGIC WHERE ProdOrderNo = 'WRO260400468';
 # MAGIC 
 # MAGIC 
 # MAGIC -- ============================================================
-# MAGIC -- CELL F — Top L1 drift list (สำหรับ Riyad refresh PRO)
+# MAGIC -- CELL F — L4 list (BOM master ลบ component หลังเปิด PRO)
+# MAGIC -- silent drift — feed audit report ให้ MD/BOM owner
+# MAGIC -- ============================================================
+# MAGIC SELECT
+# MAGIC     Status,
+# MAGIC     ProdOrderNo,
+# MAGIC     ProdOrderItemNo,
+# MAGIC     ComponentItemNo,
+# MAGIC     pl_production_bom_no,
+# MAGIC     pl_bom_version_code,
+# MAGIC     ProdLineQty,
+# MAGIC     QtyPer,
+# MAGIC     exp1,
+# MAGIC     exp2,
+# MAGIC     con1,
+# MAGIC     con2,
+# MAGIC     CompletelyPicked
+# MAGIC FROM `Gold_Inventory_Lakehouse`.`inv`.`gold_consumption`
+# MAGIC WHERE drift_level = 'L4_COMPONENT_REMOVED'
+# MAGIC   AND NOT is_casting_pro
+# MAGIC ORDER BY ProdOrderNo, ComponentItemNo
+# MAGIC LIMIT 100;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============================================================
+# MAGIC -- CELL G — L1 drift list (BOM master ถูกแก้ค่า — Riyad refresh PRO)
 # MAGIC -- ============================================================
 # MAGIC SELECT
 # MAGIC     Status,
@@ -3995,19 +4081,19 @@ print("Rows written:", df.count())
 # MAGIC     ProdLineQty,
 # MAGIC     bom_units_per,
 # MAGIC     ComponentUnitsPer_DU_TSL              AS pc_pcs_per,
-# MAGIC     exp2                                  AS exp2_from_bom,
-# MAGIC     exp2_from_pc_original                 AS exp2_from_pc,
-# MAGIC     (exp2 - exp2_from_pc_original)        AS exp2_diff,
+# MAGIC     exp2,
+# MAGIC     exp2_from_bom_current,
+# MAGIC     (exp2_from_bom_current - exp2)        AS exp2_diff,
 # MAGIC     CompletelyPicked
 # MAGIC FROM `Gold_Inventory_Lakehouse`.`inv`.`gold_consumption`
 # MAGIC WHERE drift_level = 'L1_DRIFT'
 # MAGIC   AND NOT is_casting_pro
-# MAGIC ORDER BY ABS(exp2 - exp2_from_pc_original) DESC
+# MAGIC ORDER BY ABS(exp2_from_bom_current - exp2) DESC
 # MAGIC LIMIT 100;
 # MAGIC 
 # MAGIC 
 # MAGIC -- ============================================================
-# MAGIC -- CELL G — L2_PC_ZEROED list (อันตราย: warehouse ไม่จ่ายของ)
+# MAGIC -- CELL H — L2_PC_ZEROED list (อันตราย: warehouse ไม่จ่ายของ)
 # MAGIC -- ============================================================
 # MAGIC SELECT
 # MAGIC     Status,
@@ -4018,18 +4104,18 @@ print("Rows written:", df.count())
 # MAGIC     ProdLineQty,
 # MAGIC     bom_units_per,
 # MAGIC     ComponentUnitsPer_DU_TSL              AS pc_pcs_per,
-# MAGIC     exp2                                  AS exp2_from_bom,
-# MAGIC     exp2_from_pc_original                 AS exp2_from_pc,
+# MAGIC     exp2,
+# MAGIC     exp2_from_bom_current,
 # MAGIC     CompletelyPicked
 # MAGIC FROM `Gold_Inventory_Lakehouse`.`inv`.`gold_consumption`
 # MAGIC WHERE drift_level = 'L2_PC_ZEROED'
 # MAGIC   AND NOT is_casting_pro
-# MAGIC ORDER BY exp2 DESC
+# MAGIC ORDER BY exp2_from_bom_current DESC
 # MAGIC LIMIT 100;
 # MAGIC 
 # MAGIC 
 # MAGIC -- ============================================================
-# MAGIC -- CELL H — L3_BOM_ZEROED list (BOM data quality issue)
+# MAGIC -- CELL I — L3_BOM_ZEROED list (BOM data quality issue)
 # MAGIC -- ============================================================
 # MAGIC SELECT
 # MAGIC     Status,
@@ -4039,7 +4125,8 @@ print("Rows written:", df.count())
 # MAGIC     pl_production_bom_no,
 # MAGIC     pl_bom_version_code,
 # MAGIC     bom_units_per                         AS bom_units_per_zero,
-# MAGIC     ComponentUnitsPer_DU_TSL              AS pc_pcs_per
+# MAGIC     ComponentUnitsPer_DU_TSL              AS pc_pcs_per,
+# MAGIC     exp2
 # MAGIC FROM `Gold_Inventory_Lakehouse`.`inv`.`gold_consumption`
 # MAGIC WHERE drift_level = 'L3_BOM_ZEROED'
 # MAGIC   AND NOT is_casting_pro
@@ -4623,109 +4710,9 @@ print(f"FULL REFRESH completed into: {TGT_TBL}")
 # META   "editable": false
 # META }
 
-# CELL ********************
+# MARKDOWN ********************
 
-# MAGIC %%sql
-# MAGIC -- =====================================================================
-# MAGIC -- 🔍 VERIFY exp2_from_pc_original — Pre-flight check before v3.3 patch
-# MAGIC -- =====================================================================
-# MAGIC -- Purpose: ตรวจสอบว่า exp2_from_pc_original ใน gold_consumption_status
-# MAGIC --          มีค่าครบและ != exp2 จริง สำหรับเคส drift
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC 
-# MAGIC -- ─────────────────────────────────────────────────────────────────────
-# MAGIC -- 🟢 Q1: Overall coverage of exp2_from_pc_original
-# MAGIC -- ─────────────────────────────────────────────────────────────────────
-# MAGIC SELECT
-# MAGIC     COUNT(*)                                                         AS total_rows,
-# MAGIC     SUM(CASE WHEN exp2 IS NOT NULL THEN 1 ELSE 0 END)               AS has_exp2,
-# MAGIC     SUM(CASE WHEN exp2_from_pc_original IS NOT NULL THEN 1 ELSE 0 END) AS has_original,
-# MAGIC     SUM(CASE WHEN exp2_from_pc_original > 0 THEN 1 ELSE 0 END)      AS has_positive_original,
-# MAGIC     SUM(CASE WHEN exp2 <> exp2_from_pc_original THEN 1 ELSE 0 END)  AS exp2_differs_from_original,
-# MAGIC     ROUND(
-# MAGIC         100.0 * SUM(CASE WHEN exp2_from_pc_original IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*),
-# MAGIC         2
-# MAGIC     )                                                                AS pct_original_filled,
-# MAGIC     ROUND(
-# MAGIC         100.0 * SUM(CASE WHEN exp2 <> exp2_from_pc_original THEN 1 ELSE 0 END) / COUNT(*),
-# MAGIC         2
-# MAGIC     )                                                                AS pct_drift
-# MAGIC FROM Gold_Inventory_Lakehouse.inv.gold_consumption_status;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ─────────────────────────────────────────────────────────────────────
-# MAGIC -- 🟢 Q2: Canary check — WRO260305106 / FCG-000265-18KR
-# MAGIC -- ─────────────────────────────────────────────────────────────────────
-# MAGIC -- คาดหวัง:
-# MAGIC --   exp2                  = 41.60 (BOM master)
-# MAGIC --   exp2_from_pc_original = 45.00 (PRO original) ← ต้องการตัวนี้
-# MAGIC --   con2                  = -42.80
-# MAGIC --   Consump2 (current)    = -1.20
-# MAGIC --   Consump2 (ใหม่ใช้ original) = 45 - 42.80 = 2.20 ✅
-# MAGIC SELECT
-# MAGIC     ProdOrderNo,
-# MAGIC     ProdOrderLineNo,
-# MAGIC     ComponentItemNo,
-# MAGIC     exp1,
-# MAGIC     exp2,
-# MAGIC     exp2_from_pc_original,
-# MAGIC     con1,
-# MAGIC     con2,
-# MAGIC     Consump1,
-# MAGIC     Consump2                                                         AS consump2_current,
-# MAGIC     -- Calculate what Consump2 WOULD BE with original
-# MAGIC     (COALESCE(exp2_from_pc_original, exp2) + COALESCE(con2, 0))      AS consump2_if_original,
-# MAGIC     drift_level,
-# MAGIC     Consump_Status
-# MAGIC FROM Gold_Inventory_Lakehouse.inv.gold_consumption_status
-# MAGIC WHERE ProdOrderNo = 'WRO260305106'
-# MAGIC   AND ComponentItemNo = 'FCG-000265-18KR';
-# MAGIC 
-# MAGIC 
-# MAGIC -- ─────────────────────────────────────────────────────────────────────
-# MAGIC -- 🟢 Q3: Drift level distribution + which level has original
-# MAGIC -- ─────────────────────────────────────────────────────────────────────
-# MAGIC SELECT
-# MAGIC     drift_level,
-# MAGIC     COUNT(*)                                                         AS rows,
-# MAGIC     SUM(CASE WHEN exp2_from_pc_original IS NOT NULL THEN 1 ELSE 0 END) AS has_original,
-# MAGIC     SUM(CASE WHEN exp2 <> exp2_from_pc_original THEN 1 ELSE 0 END)  AS differs,
-# MAGIC     ROUND(AVG(CASE WHEN exp2 > 0 AND exp2_from_pc_original > 0
-# MAGIC                    THEN (exp2_from_pc_original - exp2) / exp2 * 100 END), 2) AS avg_drift_pct
-# MAGIC FROM Gold_Inventory_Lakehouse.inv.gold_consumption_status
-# MAGIC GROUP BY drift_level
-# MAGIC ORDER BY rows DESC;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ─────────────────────────────────────────────────────────────────────
-# MAGIC -- 🟢 Q4: Negative Consump2 — how many would flip to positive?
-# MAGIC -- ─────────────────────────────────────────────────────────────────────
-# MAGIC -- ดูว่ามี PRO กี่ใบที่ Consump2 ติดลบ และจะแก้ได้กี่ใบถ้าใช้ original
-# MAGIC SELECT
-# MAGIC     'Current (using exp2)' AS scenario,
-# MAGIC     COUNT(*)                          AS total,
-# MAGIC     SUM(CASE WHEN Consump2 < -0.0001 THEN 1 ELSE 0 END) AS negative_consump2,
-# MAGIC     ROUND(100.0 * SUM(CASE WHEN Consump2 < -0.0001 THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_negative
-# MAGIC FROM Gold_Inventory_Lakehouse.inv.gold_consumption_status
-# MAGIC WHERE exp2 IS NOT NULL
-# MAGIC 
-# MAGIC UNION ALL
-# MAGIC 
-# MAGIC SELECT
-# MAGIC     'If using exp2_from_pc_original' AS scenario,
-# MAGIC     COUNT(*)                          AS total,
-# MAGIC     SUM(CASE WHEN (COALESCE(exp2_from_pc_original, exp2) + COALESCE(con2, 0)) < -0.0001 THEN 1 ELSE 0 END) AS negative_consump2,
-# MAGIC     ROUND(100.0 * SUM(CASE WHEN (COALESCE(exp2_from_pc_original, exp2) + COALESCE(con2, 0)) < -0.0001 THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_negative
-# MAGIC FROM Gold_Inventory_Lakehouse.inv.gold_consumption_status
-# MAGIC WHERE exp2 IS NOT NULL;
-
-# METADATA ********************
-
-# META {
-# META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
-# META }
+# # Test
 
 # CELL ********************
 

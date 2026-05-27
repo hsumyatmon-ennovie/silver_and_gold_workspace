@@ -1,5 +1,17 @@
 [
   {
+    "name": "planning_wax_schedule",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/staging/planning_wax_schedule",
+        "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
+        "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
+      }
+    }
+  },
+  {
     "name": "planning_operation_due",
     "path": "/Tables/prod",
     "target": {
@@ -18,6 +30,42 @@
       "type": "OneLake",
       "oneLake": {
         "path": "Tables/staging/planning_forward_schedule",
+        "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
+        "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
+      }
+    }
+  },
+  {
+    "name": "planning_casting_schedule",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/staging/planning_casting_schedule",
+        "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
+        "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
+      }
+    }
+  },
+  {
+    "name": "gold_scheduling_customer_rule",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/staging/gold_scheduling_customer_rule",
+        "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
+        "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
+      }
+    }
+  },
+  {
+    "name": "gold_scheduling_category_rule",
+    "path": "/Tables/prod",
+    "target": {
+      "type": "OneLake",
+      "oneLake": {
+        "path": "Tables/staging/gold_scheduling_category_rule",
         "itemId": "9c785c00-bff3-4379-a2f9-c17fd9df2974",
         "workspaceId": "7194ead2-ba84-4757-8651-fd656958487b"
       }

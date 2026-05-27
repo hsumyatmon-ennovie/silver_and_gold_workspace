@@ -1232,7 +1232,7 @@ prod_component_cfg = {
 
 pro_weight_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/cr535_proweight",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_proweight",
                     
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -1339,7 +1339,7 @@ pro_weight_cfg = {
 # ==============================================================
 
 wm_moldmaster_cfg = {
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/wm_moldmaster",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/wm_moldmaster",
     "target_schema": "prod",
     "target_table": "silver_mold_master",
 
@@ -1481,7 +1481,7 @@ wm_moldmaster_cfg = {
 # ==============================================================
 
 wm_moldtask_cfg = {
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.Lakehouse/Tables/wm_moldtask",
+    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/wm_moldtask",
     "target_schema": "prod",
     "target_table": "silver_mold_task",
 
@@ -1587,9 +1587,20 @@ ALL_RESULTS = []
 for lakehouse, tables in LAKEHOUSES.items():
     print(f"\n=== RUNNING LOADS FOR {lakehouse} ===")
     for cfg in tables:
-        # Update the full target name dynamically
-        cfg["target_schema"] = f"{lakehouse}.{cfg['target_schema']}"
-        result = run_silver_table(cfg)
+        # Build the fully-qualified target schema without mutating the original cfg
+        full_target_schema = f"{lakehouse}.{cfg['target_schema']}"
+        full_table = f"{full_target_schema}.{cfg['target_table']}"
+
+        # 1. Drop the target table first
+        try:
+            spark.sql(f"DROP TABLE IF EXISTS {full_table}")
+            print(f"  🗑️  Dropped: {full_table}")
+        except Exception as e:
+            print(f"  ⚠️  Drop failed for {full_table}: {e}")
+
+        # 2. Run the load with the qualified schema
+        cfg_run = {**cfg, "target_schema": full_target_schema}
+        result = run_silver_table(cfg_run)
         ALL_RESULTS.append(result)
 
 print("\n=== PIPELINE SUMMARY ===")
@@ -1614,7 +1625,7 @@ for r in ALL_RESULTS:
 # MAGIC     wm_modificationname as wm_modification_name,          
 # MAGIC     wm_runtime as runtime,
 # MAGIC     wm_standardtime as standardtime
-# MAGIC FROM Dataverse_link.dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.wm_moldmodificationmachinecentermap LIMIT 1000
+# MAGIC FROM Dataverse_link.dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.wm_moldmodificationmachinecentermap LIMIT 1000
 
 # METADATA ********************
 
@@ -1671,7 +1682,7 @@ for r in ALL_RESULTS:
 # MAGIC     createdon              AS created_on,
 # MAGIC     modifiedon             AS modified_on
 # MAGIC 
-# MAGIC FROM Dataverse_link.dataverse_ennoviedev_cds2_workspace_unq85a0b4fa330ef111afc0000d3a80b.dbo.cr535_rfidvalidationerrorsproduction;
+# MAGIC FROM Dataverse_link.dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.dbo.cr535_rfidvalidationerrorsproduction;
 
 # METADATA ********************
 

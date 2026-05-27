@@ -87,7 +87,7 @@ from pyspark.sql import functions as F, Window
 # -------- CONFIG (REMAPPED SOURCES) --------
 S_ORDER = "Silver_BC_Lakehouse.bc.`Production Order`"
 S_LINE  = "Silver_BC_Lakehouse.bc.`Prod Order Line`"
-PLANNING_FORWARD_SCHEDULE = "Gold_Production_Lakehouse.prod.planning_forward_schedule"
+PLANNING_OPERATION_DUE = "Gold_Production_Lakehouse.prod.planning_operation_due"
 TARGET  = "prod.gold_production_order"
 
 KEYS   = ["prod_order_no", "prod_order_line_no"]
@@ -167,28 +167,27 @@ joined = (
       .join(pl.alias("pl"), "prod_order_no", "left")
 )
 
-# -------- 3.5) attach planned due date from planning_forward_schedule --------
-# Replaces the BC-derived prod_order_due_date with MAX(scheduled_end_date)
-# from the latest engine_run per (prod_order_no, prod_order_line_no).
+# -------- 3.5) attach planned due date from planning_operation_due --------
+# Replaces the BC-derived prod_order_due_date with the engine-anchored value.
 # Falls back to the BC Due Date when planning has no matching row.
-_pfs_w = Window.partitionBy("prod_order_no", "prod_order_line_no").orderBy(F.col("engine_run_ts").desc())
-pfs = (
-    spark.table(PLANNING_FORWARD_SCHEDULE)
-    .select("prod_order_no", "prod_order_line_no", "scheduled_end_date", "engine_run_ts")
-    .withColumn("_rr", F.dense_rank().over(_pfs_w))
-    .filter(F.col("_rr") == 1)
-    .groupBy("prod_order_no", "prod_order_line_no")
-    .agg(F.max("scheduled_end_date").alias("planned_prod_order_due_date"))
+pod = keep_latest_per_keys(
+    spark.table(PLANNING_OPERATION_DUE).select(
+        "prod_order_no", "prod_order_line_no",
+        F.col("prod_order_due_date").alias("planned_prod_order_due_date"),
+        "engine_run_ts",
+    ),
+    keys=["prod_order_no", "prod_order_line_no"],
+    order_cols=[F.col("engine_run_ts").desc()],
 )
 
 joined = (
     joined
-    .join(pfs, ["prod_order_no", "prod_order_line_no"], "left")
+    .join(pod, ["prod_order_no", "prod_order_line_no"], "left")
     .withColumn(
         "prod_order_due_date",
         F.coalesce(F.col("planned_prod_order_due_date"), F.col("prod_order_due_date")),
     )
-    .drop("planned_prod_order_due_date")
+    .drop("planned_prod_order_due_date", "engine_run_ts")
 )
 
 # -------- 4) date logic FIXED --------

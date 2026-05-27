@@ -1627,12 +1627,11 @@ prod_line AS (
             AS date
         ) AS fg_start_date,
 
-        -- fg_due_date inherits prod_order_due_date from gold_production_order,
-        -- which Notebook 4 populates from MAX(scheduled_end_date) in the latest
-        -- engine_run of planning_forward_schedule (with BC `Due Date` fallback).
-        -- Wrapped in MAX OVER for shape compatibility with the rest of the
-        -- window-based projections; prod_order_due_date is constant within a
-        -- prod_order_no so MAX is a no-op.
+        -- fg_due_date now comes from prod_order_due_date (engine-anchored via
+        -- planning_operation_due in Notebook 4) instead of line 10000's
+        -- prod_line_due_date. Wrapped in MAX OVER for shape compatibility with
+        -- the rest of the window-based projections; prod_order_due_date is
+        -- constant within a prod_order_no so MAX is a no-op.
         MAX(p.prod_order_due_date) OVER (PARTITION BY p.prod_order_no) AS fg_due_date,
 
         -- ✅ FIX: normalize item_location + use MIN for "casting due/start" (usually the scheduled/target date you want)
@@ -1881,6 +1880,473 @@ FROM result
 
 spark.sql(full_sql)
 
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark",
+# META   "frozen": true,
+# META   "editable": false
+# META }
+
+# CELL ********************
+
+TARGET = "Gold_Production_Lakehouse.prod.gold_casting_summary"
+
+full_sql = f"""
+CREATE OR REPLACE TABLE {TARGET}
+USING DELTA
+AS
+WITH
+-- 1) Source tables
+
+-- v3: Pre-aggregate engine-scheduled CASTING dates.
+-- Join key: (prod_order_no, component_item) — line_no excluded because
+-- planning_casting_schedule.prod_order_line_no is FG-level (10000) for ~95%
+-- of rows, while gold_production_order.prod_order_line_no is component routing
+-- line (20000+). Including line_no produces 0% matches. Verified safe:
+-- 10,755/10,755 (100%) of (PRO, component) keys in gold_production_order
+-- have rows_per_key=1, so no row inflation risk.
+cast_sched AS (
+    SELECT
+        prod_order_no,
+        component_item,
+        MIN(casting_date) AS scheduled_casting_date
+    FROM Gold_Production_Lakehouse.prod.planning_casting_schedule
+    GROUP BY prod_order_no, component_item
+),
+
+-- v4: Pre-aggregate engine-scheduled WAX dates.
+-- planning_wax_schedule grain is wax_pro_id, with cst_pro_list and
+-- component_list stored as CSV strings. Must double-explode then aggregate
+-- back to (PRO, component) grain.
+-- A given (PRO, component) may map to multiple wax_pro_id rows (component
+-- produced in multiple mold sizes / share-tree splits). MIN picks the
+-- earliest planned wax day, matching the semantic of "when production
+-- could start at the latest"
+-- Match rate on this join: 9,171/10,755 = 85.3% (verified 2026-05-22).
+wax_exploded AS (
+    SELECT
+        TRIM(cst_pro) AS prod_order_no,
+        TRIM(comp)    AS component_item,
+        scheduled_wax_date,
+        casting_date AS wax_due_date
+    FROM Gold_Production_Lakehouse.prod.planning_wax_schedule
+    LATERAL VIEW EXPLODE(SPLIT(cst_pro_list, ',')) t1 AS cst_pro
+    LATERAL VIEW EXPLODE(SPLIT(component_list, ',')) t2 AS comp
+),
+wax_sched AS (
+    SELECT
+        prod_order_no,
+        component_item,
+        MIN(scheduled_wax_date) AS scheduled_wax_start,
+        MIN(wax_due_date)       AS scheduled_wax_due
+    FROM wax_exploded
+    GROUP BY prod_order_no, component_item
+),
+
+pl AS (
+    SELECT
+        po.prod_line_due_date,
+        po.prod_line_start_date,
+        po.prod_line_end_date,
+        po.prod_order_due_date,
+        po.prod_order_no,
+        po.prod_order_line_no,
+        po.FG_item_no,
+        po.prod_item_line,
+        po.item_location,
+        po.prod_line_quantity,
+        po.prod_line_finished_quantity,
+        po.prod_line_remaining_quantity,
+        po.sales_order_no,
+        po.ref_prod_order,
+        po.prod_order_status,
+        -- v3: engine-scheduled casting date (used in CST_CUT broadcast for casting_due_date)
+        cs.scheduled_casting_date,
+        -- v4: engine-scheduled wax dates (used in CST_CUT broadcast for casting_start_date
+        -- and line_wax_due_date)
+        ws.scheduled_wax_start,
+        ws.scheduled_wax_due
+    FROM Gold_Production_Lakehouse.prod.gold_production_order po
+    LEFT JOIN cast_sched cs
+        ON  po.prod_order_no  = cs.prod_order_no
+        AND po.prod_item_line = cs.component_item
+    LEFT JOIN wax_sched ws
+        ON  po.prod_order_no  = ws.prod_order_no
+        AND po.prod_item_line = ws.component_item
+    WHERE po.prod_order_status IN ('Released', 'Firm Planned')
+),
+
+/* =========================
+   EMP (match first query)
+   - keep both type_name
+   - CorrectCurrentLocation + current_location_code: from 'In location in'
+   - machine_center_no (+ team/user_id): from 'To employee'
+   - keep modified_in_location_in / modified_to_employee
+   ========================= */
+emp_raw AS (
+    SELECT
+        created_on,
+        modified_on,
+        prod_order_no,
+        prod_order_line_no,
+        type_name,
+        prod_order_status,
+        `open`,
+        sales_order_no,
+        current_location_code,
+        past_location_code,
+        employee_no,
+        user_id,
+        quantity,
+        remaining_quantity,
+        item_no,
+        machine_center_no,
+        out_qty,
+        pol,
+        created_on_time,
+        CorrectCurrentLocation,
+        team,
+        ROW_NUMBER() OVER (
+            PARTITION BY prod_order_no, prod_order_line_no, item_no, type_name
+            ORDER BY COALESCE(modified_on, created_on) DESC
+        ) AS rn_type
+    FROM Gold_Production_Lakehouse.prod.gold_waxing_and_casting_status
+    WHERE type_name IN ('In location in', 'To employee')
+      AND `open` = 'Yes'
+),
+
+emp AS (
+    SELECT
+        prod_order_no,
+        prod_order_line_no,
+        item_no,
+
+        -- From 'In location in'
+        MAX(CASE WHEN type_name = 'In location in' THEN CorrectCurrentLocation END) AS CorrectCurrentLocation,
+        MAX(CASE WHEN type_name = 'In location in' THEN current_location_code END)   AS current_location_code,
+
+        -- From 'To employee'
+        MAX(CASE WHEN type_name = 'To employee' THEN machine_center_no END) AS machine_center_no,
+        MAX(CASE WHEN type_name = 'To employee' THEN team END)              AS team,
+        MAX(CASE WHEN type_name = 'To employee' THEN user_id END)           AS user_id,
+
+        -- Keep these timestamps (like first query)
+        MAX(CASE WHEN type_name = 'In location in' THEN COALESCE(modified_on, created_on) END) AS modified_in_location_in,
+        MAX(CASE WHEN type_name = 'To employee'    THEN COALESCE(modified_on, created_on) END) AS modified_to_employee
+    FROM emp_raw
+    WHERE rn_type = 1
+    GROUP BY prod_order_no, prod_order_line_no, item_no
+),
+
+cast AS (
+    SELECT
+        cp.prod_order_no,
+        cp.prod_order_line_no,
+        cp.casting_prod_order,
+        ct.casting_tree_no,
+        cp.item_no AS itemCST,
+        cp.casting_qty_to_tree,
+        cp.casting_qty_passed,
+        (cp.casting_qty_to_tree - cp.casting_qty_passed) AS casting_qty_reject,
+        ct.casting_status
+    FROM Silver_Production_Lakehouse.prod.silver_casting_parts cp
+    LEFT JOIN Silver_Production_Lakehouse.prod.silver_casting_tree ct
+        ON cp.casting_prod_order = ct.casting_prod_order
+),
+
+it AS (
+    SELECT
+        `No.`                 AS item_no,
+        `Description`         AS item_description,
+        `Metal Category Code` AS item_metal_category,
+        `Item Category Code`  AS item_category_code
+    FROM Silver_BC_Lakehouse.bc.`Item`
+),
+
+sales AS (
+    SELECT
+        SalesorderNo AS salesorder_no,
+        CusNo        AS CustomerNo,
+        CusAbbr      AS CustomerAbbr
+    FROM Gold_Production_Lakehouse.prod.gold_sales_order
+),
+
+-- 2) ProdLineData (window maxes)
+prod_line AS (
+    SELECT
+        p.*,
+
+        -- OPTION C: keep nulls null (no inheritance); just rename
+        p.sales_order_no AS sales_order,
+
+        CAST(
+            MAX(CASE WHEN p.prod_order_line_no = 10000 THEN p.prod_line_start_date END)
+            OVER (PARTITION BY p.prod_order_no)
+            AS date
+        ) AS fg_start_date,
+
+        -- fg_due_date now comes from prod_order_due_date (engine-anchored via
+        -- planning_operation_due in Notebook 4) instead of line 10000's
+        -- prod_line_due_date. Wrapped in MAX OVER for shape compatibility with
+        -- the rest of the window-based projections; prod_order_due_date is
+        -- constant within a prod_order_no so MAX is a no-op.
+        MAX(p.prod_order_due_date) OVER (PARTITION BY p.prod_order_no) AS fg_due_date,
+
+        -- casting_due_date (v3): from planning_casting_schedule, engine's planned cast day.
+        -- Same 3-layer pattern as original (CASE -> MAX OVER PARTITION).
+        MAX(
+            CASE
+                WHEN UPPER(TRIM(p.item_location)) = 'CST_CUT' THEN p.scheduled_casting_date
+            END
+        ) OVER (PARTITION BY p.prod_order_no, p.prod_item_line) AS casting_due_date,
+
+        -- casting_start_date (v4): NOW sourced from planning_wax_schedule
+        -- scheduled_wax_date. Semantic: when wax begins = when casting workflow
+        -- starts (wax precedes cast in the production chain).
+        -- Same 3-layer pattern: CASE -> MIN OVER PARTITION -> CAST to date.
+        CAST(
+            MIN(
+                CASE
+                    WHEN UPPER(TRIM(p.item_location)) = 'CST_CUT' THEN p.scheduled_wax_start
+                END
+            ) OVER (PARTITION BY p.prod_order_no, p.prod_item_line)
+            AS date
+        ) AS casting_start_date
+
+    FROM pl p
+),
+
+-- 3) FinalBase (match first query: include the same placeholder columns + joins + rn)
+final_base AS (
+    SELECT
+        p.prod_order_no,
+        p.prod_order_line_no,
+        p.FG_item_no,
+        p.prod_item_line,
+        p.item_location,
+        p.prod_line_quantity,
+        p.prod_line_finished_quantity,
+        p.prod_line_remaining_quantity,
+        p.prod_line_due_date,
+        p.prod_line_start_date,
+        p.prod_line_end_date,
+        p.sales_order,
+        p.fg_start_date,
+        p.fg_due_date,
+        p.casting_start_date,
+        p.casting_due_date,
+
+        -- v4: pass through scheduled_wax_due so the outer SELECT can use it
+        -- for line_wax_due_date. Same 3-layer pattern applied below.
+        p.scheduled_wax_due,
+
+        -- keep prod line status
+        p.prod_order_status AS prod_order_status,
+
+        -- fields from emp (placeholders exactly like first query)
+        NULL AS created_on,
+        NULL AS modified_on,
+        NULL AS type_name,
+        e.user_id,
+        'Yes' AS `open`,
+        NULL AS emp_sales_order_no,
+        NULL AS quantity,
+        NULL AS remaining_quantity,
+
+        e.current_location_code,
+        e.CorrectCurrentLocation,
+        e.machine_center_no,
+        e.team,
+
+        -- keep these (present in first query's emp select)
+        e.modified_in_location_in,
+        e.modified_to_employee,
+
+        c.casting_prod_order,
+        c.casting_tree_no,
+        c.itemCST,
+        c.casting_qty_to_tree,
+        c.casting_qty_passed,
+        c.casting_qty_reject,
+        c.casting_status,
+
+        i.item_description,
+        i.item_metal_category,
+        i.item_category_code,
+
+        s.CustomerNo,
+        s.CustomerAbbr,
+
+        CASE
+            WHEN i.item_metal_category = 'SILVER 925' THEN 'SILVER'
+            WHEN i.item_metal_category IN ('14KW','14KY','14KR','18KR','18KW','18KY','9KW','9KY') THEN 'GOLD'
+            ELSE i.item_metal_category
+        END AS metal_category,
+
+        CASE
+            WHEN c.casting_status IS NOT NULL AND LTRIM(RTRIM(c.casting_status)) <> '' THEN LTRIM(RTRIM(c.casting_status))
+            WHEN e.machine_center_no IS NOT NULL AND LTRIM(RTRIM(e.machine_center_no)) <> '' THEN LTRIM(RTRIM(e.machine_center_no))
+            ELSE 'Not Start'
+        END AS new_status,
+
+        -- OPTION C: downstream SO derived ONLY from prod line SO
+        p.sales_order AS new_so,
+
+        CASE
+            WHEN c.casting_qty_to_tree IS NOT NULL AND c.casting_qty_to_tree <> 0 THEN c.casting_qty_to_tree
+            ELSE p.prod_line_quantity
+        END AS new_qty,
+
+        ROW_NUMBER() OVER (
+            PARTITION BY p.prod_order_no, p.prod_item_line
+            ORDER BY p.prod_order_line_no DESC
+        ) AS rn
+
+    FROM prod_line p
+    LEFT JOIN emp e
+        ON  p.prod_order_no      = e.prod_order_no
+        AND p.prod_order_line_no = e.prod_order_line_no
+        AND p.prod_item_line     = e.item_no
+    LEFT JOIN cast c
+        ON  p.prod_order_no      = c.prod_order_no
+        AND p.prod_order_line_no = c.prod_order_line_no
+    LEFT JOIN it i
+        ON i.item_no = p.prod_item_line
+    LEFT JOIN sales s
+        ON p.sales_order = s.salesorder_no
+),
+
+-- 4) Apply rn filter + business filters + compute window aggs (match first query)
+result AS (
+    SELECT
+        fb.prod_order_no,
+        fb.prod_order_line_no,
+        fb.FG_item_no,
+        fb.prod_item_line,
+        fb.item_location,
+        fb.fg_start_date,
+        fb.fg_due_date,
+        fb.casting_start_date,
+        fb.casting_due_date,
+
+        -- line_wax_due_date (v4): NOW sourced from planning_wax_schedule.casting_date
+        -- (= the day wax must be done so casting can start).
+        -- The original fallback formula (prod_line_end_date - 3 days, clamped to today)
+        -- is preserved as the secondary path when engine has not scheduled this PRO.
+        COALESCE(
+            fb.scheduled_wax_due,
+            CASE
+                WHEN fb.prod_line_end_date <= current_date()
+                THEN fb.prod_line_end_date
+                ELSE GREATEST(date_sub(fb.prod_line_end_date, 3), current_date())
+            END
+        ) AS line_wax_due_date,
+
+        fb.prod_order_status,
+        fb.current_location_code,
+        fb.CorrectCurrentLocation,
+        fb.machine_center_no,
+        fb.team,
+        fb.casting_prod_order,
+
+        LTRIM(RTRIM(REPLACE(fb.casting_tree_no, 'TREE No.', ''))) AS tree_no,
+
+        fb.itemCST,
+        fb.casting_qty_to_tree,
+        fb.casting_qty_passed,
+        fb.casting_qty_reject,
+        fb.casting_status,
+        fb.CustomerNo,
+        fb.CustomerAbbr,
+        fb.metal_category,
+        fb.new_status,
+
+        CASE
+            WHEN fb.new_so IS NULL THEN NULL
+            ELSE CONCAT(SUBSTRING(fb.new_so, 1, 2), RIGHT(fb.new_so, 4))
+        END AS so_abbr,
+
+        fb.new_qty,
+
+        SUM(fb.new_qty) OVER (PARTITION BY fb.prod_order_no, fb.prod_item_line) AS total_qty,
+
+        SUM(
+            CASE
+                WHEN UPPER(LTRIM(RTRIM(fb.new_status))) = 'COMPLETE'
+                    THEN COALESCE(fb.casting_qty_to_tree, 0)
+                ELSE 0
+            END
+        ) OVER (PARTITION BY fb.prod_order_no, fb.prod_item_line) AS in_wh,
+
+        CASE
+            WHEN
+                ( SUM(fb.new_qty) OVER (PARTITION BY fb.prod_order_no, fb.prod_item_line)
+                  - SUM(CASE WHEN UPPER(LTRIM(RTRIM(fb.new_status))) = 'COMPLETE'
+                             THEN COALESCE(fb.casting_qty_to_tree, 0) ELSE 0 END
+                       ) OVER (PARTITION BY fb.prod_order_no, fb.prod_item_line)
+                ) = 0
+            THEN NULL
+            ELSE
+                ( SUM(fb.new_qty) OVER (PARTITION BY fb.prod_order_no, fb.prod_item_line)
+                  - SUM(CASE WHEN UPPER(LTRIM(RTRIM(fb.new_status))) = 'COMPLETE'
+                             THEN COALESCE(fb.casting_qty_to_tree, 0) ELSE 0 END
+                       ) OVER (PARTITION BY fb.prod_order_no, fb.prod_item_line)
+                )
+        END AS remaining_qty,
+
+        CONCAT(fb.prod_order_no, fb.prod_item_line) AS poi,
+
+        -- SAFE watermark equivalent (only candidate was modified_on; in first query it's NULL)
+        fb.modified_on AS _modified_any
+
+    FROM final_base fb
+    WHERE fb.rn = 1
+      AND fb.prod_item_line LIKE 'C%'
+      AND fb.prod_line_remaining_quantity > 0
+)
+
+SELECT
+    prod_order_no,
+    prod_order_line_no,
+    FG_item_no,
+    prod_item_line,
+    item_location,
+    fg_start_date,
+    fg_due_date,
+    casting_start_date,
+    casting_due_date,
+    line_wax_due_date,
+
+    prod_order_status,
+    current_location_code,
+    CorrectCurrentLocation,
+    machine_center_no,
+    team,
+    casting_prod_order,
+    tree_no,
+    itemCST,
+    CAST(casting_qty_to_tree AS DECIMAL(38,10)) AS casting_qty_to_tree,
+    CAST(casting_qty_passed  AS DECIMAL(38,10)) AS casting_qty_passed,
+    CAST(casting_qty_reject  AS DECIMAL(38,10)) AS casting_qty_reject,
+    casting_status,
+    CustomerNo,
+    CustomerAbbr,
+    metal_category,
+    new_status,
+    so_abbr,
+    CAST(new_qty AS DECIMAL(38,10)) AS new_qty,
+    CAST(total_qty AS DECIMAL(38,10)) AS total_qty,
+    CAST(in_wh     AS DECIMAL(38,10)) AS in_wh,
+    CAST(remaining_qty AS DECIMAL(38,10)) AS remaining_qty,
+    poi,
+    _modified_any
+FROM result
+"""
+
+spark.sql(full_sql)
 
 # METADATA ********************
 
@@ -2686,988 +3152,78 @@ spark.sql(full_sql)
 # META   "language_group": "synapse_pyspark"
 # META }
 
-# MARKDOWN ********************
-
-# # APS rule
-
 # CELL ********************
 
 # MAGIC %%sql
-# MAGIC CREATE OR REPLACE TABLE Gold_Production_Lakehouse.planning.gold_scheduling_customer_rule
+# MAGIC 
+# MAGIC -- Create / replace the lookup table
+# MAGIC CREATE OR REPLACE TABLE Gold_Production_Lakehouse.prod.gold_cst_pro_scheduled_wax_date
 # MAGIC USING DELTA
+# MAGIC TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'false')
 # MAGIC AS
+# MAGIC WITH
+# MAGIC latest_run AS (
+# MAGIC     SELECT MAX(engine_run_ts) AS max_ts
+# MAGIC     FROM Gold_Production_Lakehouse.prod.planning_wax_schedule
+# MAGIC ),
+# MAGIC 
+# MAGIC exploded_wax AS (
+# MAGIC     SELECT
+# MAGIC         p.wax_pro_id,
+# MAGIC         TRIM(cst_pro)                       AS cst_pro,
+# MAGIC         CAST(p.scheduled_wax_date AS DATE)  AS scheduled_wax_date,
+# MAGIC         CAST(p.casting_date       AS DATE)  AS casting_date
+# MAGIC     FROM Gold_Production_Lakehouse.prod.planning_wax_schedule p
+# MAGIC     CROSS JOIN latest_run lr
+# MAGIC     LATERAL VIEW EXPLODE(SPLIT(p.cst_pro_list, ',')) e AS cst_pro
+# MAGIC     WHERE p.engine_run_ts = lr.max_ts
+# MAGIC       AND p.cst_pro_list IS NOT NULL
+# MAGIC       AND TRIM(p.cst_pro_list) <> ''
+# MAGIC ),
+# MAGIC 
+# MAGIC primary_src AS (
+# MAGIC     SELECT
+# MAGIC         cst_pro,
+# MAGIC         MIN(scheduled_wax_date)    AS scheduled_wax_date,
+# MAGIC         MIN(casting_date)          AS casting_date,
+# MAGIC         MIN(wax_pro_id)            AS wax_pro_id_first,
+# MAGIC         COUNT(DISTINCT wax_pro_id) AS wax_pro_count
+# MAGIC     FROM exploded_wax
+# MAGIC     WHERE scheduled_wax_date IS NOT NULL
+# MAGIC     GROUP BY cst_pro
+# MAGIC ),
+# MAGIC 
+# MAGIC fallback_src AS (
+# MAGIC     SELECT
+# MAGIC         prod_order_no                  AS cst_pro,
+# MAGIC         MIN(CAST(created_on AS DATE))  AS created_on_date
+# MAGIC     FROM Gold_Production_Lakehouse.prod.gold_production_status
+# MAGIC     WHERE prod_order_no IS NOT NULL
+# MAGIC       AND TRIM(prod_order_no) <> ''
+# MAGIC     GROUP BY prod_order_no
+# MAGIC ),
+# MAGIC 
+# MAGIC universe AS (
+# MAGIC     SELECT cst_pro FROM primary_src
+# MAGIC     UNION
+# MAGIC     SELECT cst_pro FROM fallback_src
+# MAGIC )
+# MAGIC 
 # MAGIC SELECT
-# MAGIC     customer_no, material_type, cell_code, priority_rank,
+# MAGIC     u.cst_pro,
+# MAGIC     COALESCE(p.scheduled_wax_date, f.created_on_date)   AS scheduled_wax_date,
 # MAGIC     CASE
-# MAGIC         WHEN cell_code IN ('CELL105','CELL109')                                         THEN 'PRODLINE1'
-# MAGIC         WHEN cell_code IN ('CELL201','CELL202','CELL203','CELL204','CELL205','CELL218') THEN 'PRODLINE2'
-# MAGIC         WHEN cell_code IN ('CELL103','CELL104','CELL206','CELL207','CELL208','CELL209','CELL210','CELL219','CELL220') THEN 'PRODLINE3'
-# MAGIC         WHEN cell_code IN ('CELL211','CELL212','CELL213')                               THEN 'PRODLINE4'
-# MAGIC         WHEN cell_code IN ('CELL214','CELL215','CELL216','CELL217')                     THEN 'PRODLINE5'
-# MAGIC         ELSE 'UNKNOWN'
-# MAGIC     END AS production_line,
-# MAGIC     current_timestamp() AS _load_timestamp
-# MAGIC FROM VALUES
-# MAGIC         -- Bangkok Kraft Production
-# MAGIC         ('CD-00003', 'gold', 'CELL103', 1),
-# MAGIC         ('CD-00003', 'gold', 'CELL109', 2),
-# MAGIC         ('CD-00003', 'silver', 'CELL211', 1),
-# MAGIC         ('CD-00003', 'silver', 'CELL212', 2),
-# MAGIC         ('CD-00003', 'silver', 'CELL213', 3),
-# MAGIC         ('CD-00003', 'silver', 'CELL214', 4),
-# MAGIC         ('CD-00003', 'silver', 'CELL215', 5),
-# MAGIC         ('CD-00003', 'silver', 'CELL216', 6),
-# MAGIC         ('CD-00003', 'silver', 'CELL217', 7),
-# MAGIC         ('CD-00003', 'silver', 'CELL219', 8),
-# MAGIC         ('CD-00003', 'silver', 'CELL206', 9),
-# MAGIC         ('CD-00003', 'silver', 'CELL207', 10),
-# MAGIC         ('CD-00003', 'silver', 'CELL109', 11),
-# MAGIC         ('CD-00003', 'bangle', 'CELL211', 1),
-# MAGIC         ('CD-00003', 'bangle', 'CELL212', 2),
-# MAGIC         ('CD-00003', 'bangle', 'CELL213', 3),
-# MAGIC         ('CD-00003', 'bangle', 'CELL206', 4),
-# MAGIC         ('CD-00003', 'bangle', 'CELL207', 5),
-# MAGIC         ('CD-00003', 'bangle', 'CELL214', 6),
-# MAGIC         ('CD-00003', 'bangle', 'CELL215', 7),
-# MAGIC         ('CD-00003', 'bangle', 'CELL216', 8),
-# MAGIC         ('CD-00003', 'bangle', 'CELL217', 9),
-# MAGIC         ('CD-00003', 'bangle', 'CELL109', 10),
-# MAGIC         ('CD-00003', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CD-00003', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CD-00003', 'bangle-lock', 'CELL210', 3),
-# MAGIC         ('CD-00003', 'bangle-lock', 'CELL208', 4),
-# MAGIC         ('CD-00003', 'bangle-lock', 'CELL109', 5),
-# MAGIC         -- ENNOVIE
-# MAGIC         ('CD-00004', 'gold', 'CELL103', 1),
-# MAGIC         ('CD-00004', 'silver', 'CELL205', 1),
-# MAGIC         ('CD-00004', 'silver', 'CELL201', 2),
-# MAGIC         ('CD-00004', 'silver', 'CELL202', 3),
-# MAGIC         ('CD-00004', 'silver', 'CELL203', 4),
-# MAGIC         ('CD-00004', 'silver', 'CELL204', 5),
-# MAGIC         ('CD-00004', 'silver', 'CELL214', 6),
-# MAGIC         ('CD-00004', 'silver', 'CELL215', 7),
-# MAGIC         ('CD-00004', 'silver', 'CELL216', 8),
-# MAGIC         ('CD-00004', 'silver', 'CELL217', 9),
-# MAGIC         ('CD-00004', 'silver', 'CELL211', 10),
-# MAGIC         ('CD-00004', 'silver', 'CELL212', 11),
-# MAGIC         ('CD-00004', 'silver', 'CELL213', 12),
-# MAGIC         ('CD-00004', 'silver', 'CELL206', 13),
-# MAGIC         ('CD-00004', 'silver', 'CELL207', 14),
-# MAGIC         ('CD-00004', 'silver', 'CELL208', 15),
-# MAGIC         ('CD-00004', 'silver', 'CELL209', 16),
-# MAGIC         ('CD-00004', 'silver', 'CELL210', 17),
-# MAGIC         ('CD-00004', 'silver', 'CELL219', 18),
-# MAGIC         ('CD-00004', 'silver', 'CELL109', 19),
-# MAGIC         ('CD-00004', 'bangle', 'CELL201', 1),
-# MAGIC         ('CD-00004', 'bangle', 'CELL202', 2),
-# MAGIC         ('CD-00004', 'bangle', 'CELL203', 3),
-# MAGIC         ('CD-00004', 'bangle', 'CELL204', 4),
-# MAGIC         ('CD-00004', 'bangle', 'CELL205', 5),
-# MAGIC         ('CD-00004', 'bangle', 'CELL214', 6),
-# MAGIC         ('CD-00004', 'bangle', 'CELL215', 7),
-# MAGIC         ('CD-00004', 'bangle', 'CELL216', 8),
-# MAGIC         ('CD-00004', 'bangle', 'CELL217', 9),
-# MAGIC         ('CD-00004', 'bangle', 'CELL109', 10),
-# MAGIC         ('CD-00004', 'bangle', 'CELL211', 11),
-# MAGIC         ('CD-00004', 'bangle', 'CELL212', 12),
-# MAGIC         ('CD-00004', 'bangle', 'CELL213', 13),
-# MAGIC         ('CD-00004', 'bangle', 'CELL206', 14),
-# MAGIC         ('CD-00004', 'bangle', 'CELL207', 15),
-# MAGIC         ('CD-00004', 'bangle', 'CELL208', 16),
-# MAGIC         ('CD-00004', 'bangle', 'CELL209', 17),
-# MAGIC         ('CD-00004', 'bangle', 'CELL210', 18),
-# MAGIC         ('CD-00004', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CD-00004', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CD-00004', 'bangle-lock', 'CELL210', 3),
-# MAGIC         ('CD-00004', 'bangle-lock', 'CELL208', 4),
-# MAGIC         -- DE BEERS JEWELLERS
-# MAGIC         ('CI-00002', 'gold', 'CELL109', 1),
-# MAGIC         ('CI-00002', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00002', 'bangle-lock', 'CELL208', 2),
-# MAGIC         -- GUESS EUROPE SAGL
-# MAGIC         ('CI-00004', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00004', 'silver', 'CELL206', 1),
-# MAGIC         ('CI-00004', 'silver', 'CELL207', 2),
-# MAGIC         ('CI-00004', 'silver', 'CELL208', 3),
-# MAGIC         ('CI-00004', 'silver', 'CELL209', 4),
-# MAGIC         ('CI-00004', 'silver', 'CELL210', 5),
-# MAGIC         ('CI-00004', 'silver', 'CELL219', 6),
-# MAGIC         ('CI-00004', 'silver', 'CELL201', 7),
-# MAGIC         ('CI-00004', 'silver', 'CELL202', 8),
-# MAGIC         ('CI-00004', 'silver', 'CELL203', 9),
-# MAGIC         ('CI-00004', 'silver', 'CELL204', 10),
-# MAGIC         ('CI-00004', 'silver', 'CELL205', 11),
-# MAGIC         ('CI-00004', 'silver', 'CELL214', 12),
-# MAGIC         ('CI-00004', 'silver', 'CELL215', 13),
-# MAGIC         ('CI-00004', 'silver', 'CELL216', 14),
-# MAGIC         ('CI-00004', 'silver', 'CELL217', 15),
-# MAGIC         ('CI-00004', 'silver', 'CELL211', 16),
-# MAGIC         ('CI-00004', 'silver', 'CELL212', 17),
-# MAGIC         ('CI-00004', 'silver', 'CELL213', 18),
-# MAGIC         ('CI-00004', 'bangle', 'CELL206', 1),
-# MAGIC         ('CI-00004', 'bangle', 'CELL207', 2),
-# MAGIC         ('CI-00004', 'bangle', 'CELL208', 3),
-# MAGIC         ('CI-00004', 'bangle', 'CELL209', 4),
-# MAGIC         ('CI-00004', 'bangle', 'CELL210', 5),
-# MAGIC         ('CI-00004', 'bangle', 'CELL201', 6),
-# MAGIC         ('CI-00004', 'bangle', 'CELL202', 7),
-# MAGIC         ('CI-00004', 'bangle', 'CELL203', 8),
-# MAGIC         ('CI-00004', 'bangle', 'CELL204', 9),
-# MAGIC         ('CI-00004', 'bangle', 'CELL205', 10),
-# MAGIC         ('CI-00004', 'bangle', 'CELL109', 11),
-# MAGIC         ('CI-00004', 'bangle', 'CELL214', 12),
-# MAGIC         ('CI-00004', 'bangle', 'CELL215', 13),
-# MAGIC         ('CI-00004', 'bangle', 'CELL216', 14),
-# MAGIC         ('CI-00004', 'bangle', 'CELL217', 15),
-# MAGIC         ('CI-00004', 'bangle', 'CELL211', 16),
-# MAGIC         ('CI-00004', 'bangle', 'CELL212', 17),
-# MAGIC         ('CI-00004', 'bangle', 'CELL213', 18),
-# MAGIC         ('CI-00004', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00004', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00004', 'bangle-lock', 'CELL210', 3),
-# MAGIC         ('CI-00004', 'bangle-lock', 'CELL208', 4),
-# MAGIC         -- SA SEZANE
-# MAGIC         ('CI-00008', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00008', 'silver', 'CELL214', 1),
-# MAGIC         ('CI-00008', 'silver', 'CELL215', 2),
-# MAGIC         ('CI-00008', 'silver', 'CELL216', 3),
-# MAGIC         ('CI-00008', 'silver', 'CELL217', 4),
-# MAGIC         ('CI-00008', 'silver', 'CELL201', 5),
-# MAGIC         ('CI-00008', 'silver', 'CELL202', 6),
-# MAGIC         ('CI-00008', 'silver', 'CELL203', 7),
-# MAGIC         ('CI-00008', 'silver', 'CELL204', 8),
-# MAGIC         ('CI-00008', 'silver', 'CELL205', 9),
-# MAGIC         ('CI-00008', 'silver', 'CELL211', 10),
-# MAGIC         ('CI-00008', 'silver', 'CELL212', 11),
-# MAGIC         ('CI-00008', 'silver', 'CELL213', 12),
-# MAGIC         ('CI-00008', 'silver', 'CELL206', 13),
-# MAGIC         ('CI-00008', 'silver', 'CELL207', 14),
-# MAGIC         ('CI-00008', 'silver', 'CELL208', 15),
-# MAGIC         ('CI-00008', 'silver', 'CELL209', 16),
-# MAGIC         ('CI-00008', 'silver', 'CELL210', 17),
-# MAGIC         ('CI-00008', 'silver', 'CELL219', 18),
-# MAGIC         ('CI-00008', 'silver', 'CELL109', 19),
-# MAGIC         ('CI-00008', 'brass', 'CELL214', 1),
-# MAGIC         ('CI-00008', 'brass', 'CELL215', 2),
-# MAGIC         ('CI-00008', 'brass', 'CELL216', 3),
-# MAGIC         ('CI-00008', 'brass', 'CELL217', 4),
-# MAGIC         ('CI-00008', 'brass', 'CELL201', 5),
-# MAGIC         ('CI-00008', 'brass', 'CELL202', 6),
-# MAGIC         ('CI-00008', 'brass', 'CELL203', 7),
-# MAGIC         ('CI-00008', 'brass', 'CELL204', 8),
-# MAGIC         ('CI-00008', 'brass', 'CELL205', 9),
-# MAGIC         ('CI-00008', 'brass', 'CELL211', 10),
-# MAGIC         ('CI-00008', 'brass', 'CELL212', 11),
-# MAGIC         ('CI-00008', 'brass', 'CELL213', 12),
-# MAGIC         ('CI-00008', 'brass', 'CELL206', 13),
-# MAGIC         ('CI-00008', 'brass', 'CELL207', 14),
-# MAGIC         ('CI-00008', 'brass', 'CELL208', 15),
-# MAGIC         ('CI-00008', 'brass', 'CELL209', 16),
-# MAGIC         ('CI-00008', 'brass', 'CELL210', 17),
-# MAGIC         ('CI-00008', 'brass', 'CELL219', 18),
-# MAGIC         ('CI-00008', 'bangle', 'CELL214', 1),
-# MAGIC         ('CI-00008', 'bangle', 'CELL215', 2),
-# MAGIC         ('CI-00008', 'bangle', 'CELL216', 3),
-# MAGIC         ('CI-00008', 'bangle', 'CELL217', 4),
-# MAGIC         ('CI-00008', 'bangle', 'CELL201', 5),
-# MAGIC         ('CI-00008', 'bangle', 'CELL202', 6),
-# MAGIC         ('CI-00008', 'bangle', 'CELL203', 7),
-# MAGIC         ('CI-00008', 'bangle', 'CELL204', 8),
-# MAGIC         ('CI-00008', 'bangle', 'CELL205', 9),
-# MAGIC         ('CI-00008', 'bangle', 'CELL103', 10),
-# MAGIC         ('CI-00008', 'bangle', 'CELL211', 11),
-# MAGIC         ('CI-00008', 'bangle', 'CELL212', 12),
-# MAGIC         ('CI-00008', 'bangle', 'CELL213', 13),
-# MAGIC         ('CI-00008', 'bangle', 'CELL206', 14),
-# MAGIC         ('CI-00008', 'bangle', 'CELL207', 15),
-# MAGIC         ('CI-00008', 'bangle', 'CELL208', 16),
-# MAGIC         ('CI-00008', 'bangle', 'CELL209', 17),
-# MAGIC         ('CI-00008', 'bangle', 'CELL210', 18),
-# MAGIC         ('CI-00008', 'bangle', 'CELL109', 19),
-# MAGIC         ('CI-00008', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00008', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00008', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- KIMAI LTD
-# MAGIC         ('CI-00009', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00009', 'bangle', 'CELL206', 1),
-# MAGIC         ('CI-00009', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00009', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00009', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- BTB b.v.
-# MAGIC         ('CI-00013', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00013', 'silver', 'CELL208', 1),
-# MAGIC         ('CI-00013', 'silver', 'CELL207', 2),
-# MAGIC         ('CI-00013', 'silver', 'CELL209', 3),
-# MAGIC         ('CI-00013', 'silver', 'CELL210', 4),
-# MAGIC         ('CI-00013', 'silver', 'CELL219', 5),
-# MAGIC         ('CI-00013', 'silver', 'CELL211', 6),
-# MAGIC         ('CI-00013', 'silver', 'CELL212', 7),
-# MAGIC         ('CI-00013', 'silver', 'CELL213', 8),
-# MAGIC         ('CI-00013', 'silver', 'CELL214', 9),
-# MAGIC         ('CI-00013', 'silver', 'CELL215', 10),
-# MAGIC         ('CI-00013', 'silver', 'CELL216', 11),
-# MAGIC         ('CI-00013', 'silver', 'CELL217', 12),
-# MAGIC         ('CI-00013', 'bangle', 'CELL206', 1),
-# MAGIC         ('CI-00013', 'bangle', 'CELL207', 2),
-# MAGIC         ('CI-00013', 'bangle', 'CELL208', 3),
-# MAGIC         ('CI-00013', 'bangle', 'CELL209', 4),
-# MAGIC         ('CI-00013', 'bangle', 'CELL210', 5),
-# MAGIC         ('CI-00013', 'bangle', 'CELL201', 6),
-# MAGIC         ('CI-00013', 'bangle', 'CELL202', 7),
-# MAGIC         ('CI-00013', 'bangle', 'CELL203', 8),
-# MAGIC         ('CI-00013', 'bangle', 'CELL204', 9),
-# MAGIC         ('CI-00013', 'bangle', 'CELL109', 10),
-# MAGIC         ('CI-00013', 'bangle', 'CELL214', 11),
-# MAGIC         ('CI-00013', 'bangle', 'CELL215', 12),
-# MAGIC         ('CI-00013', 'bangle', 'CELL216', 13),
-# MAGIC         ('CI-00013', 'bangle', 'CELL217', 14),
-# MAGIC         ('CI-00013', 'bangle', 'CELL211', 15),
-# MAGIC         ('CI-00013', 'bangle', 'CELL212', 16),
-# MAGIC         ('CI-00013', 'bangle', 'CELL213', 17),
-# MAGIC         ('CI-00013', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00013', 'bangle-lock', 'CELL208', 2),
-# MAGIC         ('CI-00013', 'bangle-lock', 'CELL209', 3),
-# MAGIC         ('CI-00013', 'bangle-lock', 'CELL210', 4),
-# MAGIC         -- CLOCKS & COLOURS LTD
-# MAGIC         ('CI-00016', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00016', 'silver', 'CELL211', 1),
-# MAGIC         ('CI-00016', 'silver', 'CELL212', 2),
-# MAGIC         ('CI-00016', 'silver', 'CELL213', 3),
-# MAGIC         ('CI-00016', 'silver', 'CELL219', 4),
-# MAGIC         ('CI-00016', 'bangle', 'CELL211', 1),
-# MAGIC         ('CI-00016', 'bangle', 'CELL212', 2),
-# MAGIC         ('CI-00016', 'bangle', 'CELL213', 3),
-# MAGIC         ('CI-00016', 'bangle', 'CELL206', 4),
-# MAGIC         ('CI-00016', 'bangle', 'CELL207', 5),
-# MAGIC         ('CI-00016', 'bangle', 'CELL208', 6),
-# MAGIC         ('CI-00016', 'bangle', 'CELL209', 7),
-# MAGIC         ('CI-00016', 'bangle', 'CELL210', 8),
-# MAGIC         ('CI-00016', 'bangle', 'CELL214', 9),
-# MAGIC         ('CI-00016', 'bangle', 'CELL215', 10),
-# MAGIC         ('CI-00016', 'bangle', 'CELL216', 11),
-# MAGIC         ('CI-00016', 'bangle', 'CELL217', 12),
-# MAGIC         ('CI-00016', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00016', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00016', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- DHTG LTD
-# MAGIC         ('CI-00018', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00018', 'silver', 'CELL214', 1),
-# MAGIC         ('CI-00018', 'silver', 'CELL211', 2),
-# MAGIC         ('CI-00018', 'silver', 'CELL212', 3),
-# MAGIC         ('CI-00018', 'silver', 'CELL213', 4),
-# MAGIC         ('CI-00018', 'silver', 'CELL219', 5),
-# MAGIC         ('CI-00018', 'bangle', 'CELL214', 1),
-# MAGIC         ('CI-00018', 'bangle', 'CELL215', 2),
-# MAGIC         ('CI-00018', 'bangle', 'CELL216', 3),
-# MAGIC         ('CI-00018', 'bangle', 'CELL217', 4),
-# MAGIC         ('CI-00018', 'bangle', 'CELL201', 5),
-# MAGIC         ('CI-00018', 'bangle', 'CELL202', 6),
-# MAGIC         ('CI-00018', 'bangle', 'CELL203', 7),
-# MAGIC         ('CI-00018', 'bangle', 'CELL204', 8),
-# MAGIC         ('CI-00018', 'bangle', 'CELL205', 9),
-# MAGIC         ('CI-00018', 'bangle', 'CELL109', 10),
-# MAGIC         ('CI-00018', 'bangle', 'CELL211', 11),
-# MAGIC         ('CI-00018', 'bangle', 'CELL212', 12),
-# MAGIC         ('CI-00018', 'bangle', 'CELL213', 13),
-# MAGIC         ('CI-00018', 'bangle', 'CELL206', 14),
-# MAGIC         ('CI-00018', 'bangle', 'CELL207', 15),
-# MAGIC         ('CI-00018', 'bangle', 'CELL208', 16),
-# MAGIC         ('CI-00018', 'bangle', 'CELL209', 17),
-# MAGIC         ('CI-00018', 'bangle', 'CELL210', 18),
-# MAGIC         ('CI-00018', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00018', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00018', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- MISSOMA LTD
-# MAGIC         ('CI-00020', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00020', 'silver', 'CELL214', 1),
-# MAGIC         ('CI-00020', 'silver', 'CELL215', 2),
-# MAGIC         ('CI-00020', 'silver', 'CELL216', 3),
-# MAGIC         ('CI-00020', 'silver', 'CELL217', 4),
-# MAGIC         ('CI-00020', 'silver', 'CELL211', 5),
-# MAGIC         ('CI-00020', 'silver', 'CELL212', 6),
-# MAGIC         ('CI-00020', 'silver', 'CELL213', 7),
-# MAGIC         ('CI-00020', 'silver', 'CELL201', 8),
-# MAGIC         ('CI-00020', 'silver', 'CELL202', 9),
-# MAGIC         ('CI-00020', 'silver', 'CELL203', 10),
-# MAGIC         ('CI-00020', 'silver', 'CELL204', 11),
-# MAGIC         ('CI-00020', 'silver', 'CELL205', 12),
-# MAGIC         ('CI-00020', 'silver', 'CELL206', 13),
-# MAGIC         ('CI-00020', 'silver', 'CELL207', 14),
-# MAGIC         ('CI-00020', 'silver', 'CELL208', 15),
-# MAGIC         ('CI-00020', 'silver', 'CELL209', 16),
-# MAGIC         ('CI-00020', 'silver', 'CELL210', 17),
-# MAGIC         ('CI-00020', 'silver', 'CELL219', 18),
-# MAGIC         ('CI-00020', 'brass', 'CELL214', 1),
-# MAGIC         ('CI-00020', 'brass', 'CELL215', 2),
-# MAGIC         ('CI-00020', 'brass', 'CELL216', 3),
-# MAGIC         ('CI-00020', 'brass', 'CELL217', 4),
-# MAGIC         ('CI-00020', 'brass', 'CELL211', 5),
-# MAGIC         ('CI-00020', 'brass', 'CELL212', 6),
-# MAGIC         ('CI-00020', 'brass', 'CELL213', 7),
-# MAGIC         ('CI-00020', 'brass', 'CELL201', 8),
-# MAGIC         ('CI-00020', 'brass', 'CELL202', 9),
-# MAGIC         ('CI-00020', 'brass', 'CELL203', 10),
-# MAGIC         ('CI-00020', 'brass', 'CELL204', 11),
-# MAGIC         ('CI-00020', 'brass', 'CELL205', 12),
-# MAGIC         ('CI-00020', 'brass', 'CELL206', 13),
-# MAGIC         ('CI-00020', 'brass', 'CELL207', 14),
-# MAGIC         ('CI-00020', 'brass', 'CELL208', 15),
-# MAGIC         ('CI-00020', 'brass', 'CELL209', 16),
-# MAGIC         ('CI-00020', 'brass', 'CELL210', 17),
-# MAGIC         ('CI-00020', 'brass', 'CELL219', 18),
-# MAGIC         ('CI-00020', 'bangle', 'CELL214', 1),
-# MAGIC         ('CI-00020', 'bangle', 'CELL215', 2),
-# MAGIC         ('CI-00020', 'bangle', 'CELL216', 3),
-# MAGIC         ('CI-00020', 'bangle', 'CELL217', 4),
-# MAGIC         ('CI-00020', 'bangle', 'CELL201', 5),
-# MAGIC         ('CI-00020', 'bangle', 'CELL202', 6),
-# MAGIC         ('CI-00020', 'bangle', 'CELL203', 7),
-# MAGIC         ('CI-00020', 'bangle', 'CELL204', 8),
-# MAGIC         ('CI-00020', 'bangle', 'CELL205', 9),
-# MAGIC         ('CI-00020', 'bangle', 'CELL103', 10),
-# MAGIC         ('CI-00020', 'bangle', 'CELL211', 11),
-# MAGIC         ('CI-00020', 'bangle', 'CELL212', 12),
-# MAGIC         ('CI-00020', 'bangle', 'CELL213', 13),
-# MAGIC         ('CI-00020', 'bangle', 'CELL206', 14),
-# MAGIC         ('CI-00020', 'bangle', 'CELL207', 15),
-# MAGIC         ('CI-00020', 'bangle', 'CELL208', 16),
-# MAGIC         ('CI-00020', 'bangle', 'CELL209', 17),
-# MAGIC         ('CI-00020', 'bangle', 'CELL210', 18),
-# MAGIC         ('CI-00020', 'bangle', 'CELL109', 19),
-# MAGIC         ('CI-00020', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00020', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00020', 'bangle-lock', 'CELL210', 3),
-# MAGIC         ('CI-00020', 'bangle-lock', 'CELL208', 4),
-# MAGIC         ('CI-00020', 'bangle-lock', 'CELL205', 5),
-# MAGIC         ('CI-00020', 'bangle-lock', 'CELL217', 6),
-# MAGIC         -- MONICA VINADER LTD
-# MAGIC         ('CI-00022', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00022', 'silver', 'CELL205', 1),
-# MAGIC         ('CI-00022', 'silver', 'CELL201', 2),
-# MAGIC         ('CI-00022', 'silver', 'CELL202', 3),
-# MAGIC         ('CI-00022', 'silver', 'CELL203', 4),
-# MAGIC         ('CI-00022', 'silver', 'CELL204', 5),
-# MAGIC         ('CI-00022', 'silver', 'CELL214', 6),
-# MAGIC         ('CI-00022', 'silver', 'CELL215', 7),
-# MAGIC         ('CI-00022', 'silver', 'CELL216', 8),
-# MAGIC         ('CI-00022', 'silver', 'CELL217', 9),
-# MAGIC         ('CI-00022', 'silver', 'CELL211', 10),
-# MAGIC         ('CI-00022', 'silver', 'CELL212', 11),
-# MAGIC         ('CI-00022', 'silver', 'CELL213', 12),
-# MAGIC         ('CI-00022', 'silver', 'CELL206', 13),
-# MAGIC         ('CI-00022', 'silver', 'CELL207', 14),
-# MAGIC         ('CI-00022', 'silver', 'CELL208', 15),
-# MAGIC         ('CI-00022', 'silver', 'CELL209', 16),
-# MAGIC         ('CI-00022', 'silver', 'CELL210', 17),
-# MAGIC         ('CI-00022', 'silver', 'CELL219', 18),
-# MAGIC         ('CI-00022', 'silver', 'CELL109', 19),
-# MAGIC         ('CI-00022', 'bangle', 'CELL201', 1),
-# MAGIC         ('CI-00022', 'bangle', 'CELL202', 2),
-# MAGIC         ('CI-00022', 'bangle', 'CELL203', 3),
-# MAGIC         ('CI-00022', 'bangle', 'CELL204', 4),
-# MAGIC         ('CI-00022', 'bangle', 'CELL205', 5),
-# MAGIC         ('CI-00022', 'bangle', 'CELL214', 6),
-# MAGIC         ('CI-00022', 'bangle', 'CELL215', 7),
-# MAGIC         ('CI-00022', 'bangle', 'CELL216', 8),
-# MAGIC         ('CI-00022', 'bangle', 'CELL217', 9),
-# MAGIC         ('CI-00022', 'bangle', 'CELL103', 10),
-# MAGIC         ('CI-00022', 'bangle', 'CELL109', 11),
-# MAGIC         ('CI-00022', 'bangle', 'CELL211', 12),
-# MAGIC         ('CI-00022', 'bangle', 'CELL212', 13),
-# MAGIC         ('CI-00022', 'bangle', 'CELL213', 14),
-# MAGIC         ('CI-00022', 'bangle', 'CELL206', 15),
-# MAGIC         ('CI-00022', 'bangle', 'CELL207', 16),
-# MAGIC         ('CI-00022', 'bangle', 'CELL208', 17),
-# MAGIC         ('CI-00022', 'bangle', 'CELL209', 18),
-# MAGIC         ('CI-00022', 'bangle', 'CELL210', 19),
-# MAGIC         ('CI-00022', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00022', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00022', 'bangle-lock', 'CELL210', 3),
-# MAGIC         ('CI-00022', 'bangle-lock', 'CELL211', 4),
-# MAGIC         -- THE GREAT FROG
-# MAGIC         ('CI-00027', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00027', 'silver', 'CELL211', 1),
-# MAGIC         ('CI-00027', 'silver', 'CELL212', 2),
-# MAGIC         ('CI-00027', 'silver', 'CELL213', 3),
-# MAGIC         ('CI-00027', 'silver', 'CELL214', 4),
-# MAGIC         ('CI-00027', 'silver', 'CELL215', 5),
-# MAGIC         ('CI-00027', 'silver', 'CELL216', 6),
-# MAGIC         ('CI-00027', 'silver', 'CELL217', 7),
-# MAGIC         ('CI-00027', 'silver', 'CELL206', 8),
-# MAGIC         ('CI-00027', 'silver', 'CELL207', 9),
-# MAGIC         ('CI-00027', 'silver', 'CELL208', 10),
-# MAGIC         ('CI-00027', 'silver', 'CELL209', 11),
-# MAGIC         ('CI-00027', 'silver', 'CELL210', 12),
-# MAGIC         ('CI-00027', 'silver', 'CELL219', 13),
-# MAGIC         ('CI-00027', 'silver', 'CELL109', 14),
-# MAGIC         ('CI-00027', 'bangle', 'CELL211', 1),
-# MAGIC         ('CI-00027', 'bangle', 'CELL212', 2),
-# MAGIC         ('CI-00027', 'bangle', 'CELL213', 3),
-# MAGIC         ('CI-00027', 'bangle', 'CELL214', 4),
-# MAGIC         ('CI-00027', 'bangle', 'CELL215', 5),
-# MAGIC         ('CI-00027', 'bangle', 'CELL216', 6),
-# MAGIC         ('CI-00027', 'bangle', 'CELL217', 7),
-# MAGIC         ('CI-00027', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00027', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00027', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- ASTRID & MIYU
-# MAGIC         ('CI-00029', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00029', 'silver', 'CELL211', 1),
-# MAGIC         ('CI-00029', 'silver', 'CELL212', 2),
-# MAGIC         ('CI-00029', 'silver', 'CELL213', 3),
-# MAGIC         ('CI-00029', 'silver', 'CELL214', 4),
-# MAGIC         ('CI-00029', 'silver', 'CELL215', 5),
-# MAGIC         ('CI-00029', 'silver', 'CELL216', 6),
-# MAGIC         ('CI-00029', 'silver', 'CELL217', 7),
-# MAGIC         ('CI-00029', 'silver', 'CELL219', 8),
-# MAGIC         ('CI-00029', 'silver', 'CELL206', 9),
-# MAGIC         ('CI-00029', 'silver', 'CELL210', 10),
-# MAGIC         ('CI-00029', 'silver', 'CELL207', 11),
-# MAGIC         ('CI-00029', 'silver', 'CELL208', 12),
-# MAGIC         ('CI-00029', 'silver', 'CELL209', 13),
-# MAGIC         ('CI-00029', 'silver', 'CELL201', 14),
-# MAGIC         ('CI-00029', 'silver', 'CELL202', 15),
-# MAGIC         ('CI-00029', 'silver', 'CELL203', 16),
-# MAGIC         ('CI-00029', 'silver', 'CELL204', 17),
-# MAGIC         ('CI-00029', 'silver', 'CELL205', 18),
-# MAGIC         ('CI-00029', 'silver', 'CELL103', 19),
-# MAGIC         ('CI-00029', 'silver', 'CELL109', 20),
-# MAGIC         ('CI-00029', 'bangle', 'CELL211', 1),
-# MAGIC         ('CI-00029', 'bangle', 'CELL212', 2),
-# MAGIC         ('CI-00029', 'bangle', 'CELL213', 3),
-# MAGIC         ('CI-00029', 'bangle', 'CELL214', 4),
-# MAGIC         ('CI-00029', 'bangle', 'CELL215', 5),
-# MAGIC         ('CI-00029', 'bangle', 'CELL216', 6),
-# MAGIC         ('CI-00029', 'bangle', 'CELL217', 7),
-# MAGIC         ('CI-00029', 'bangle', 'CELL201', 8),
-# MAGIC         ('CI-00029', 'bangle', 'CELL202', 9),
-# MAGIC         ('CI-00029', 'bangle', 'CELL203', 10),
-# MAGIC         ('CI-00029', 'bangle', 'CELL204', 11),
-# MAGIC         ('CI-00029', 'bangle', 'CELL205', 12),
-# MAGIC         ('CI-00029', 'bangle', 'CELL103', 13),
-# MAGIC         ('CI-00029', 'bangle', 'CELL109', 14),
-# MAGIC         ('CI-00029', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00029', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00029', 'bangle-lock', 'CELL210', 3),
-# MAGIC         ('CI-00029', 'bangle-lock', 'CELL208', 4),
-# MAGIC         -- SEPAJATI LIMITED
-# MAGIC         ('CI-00039', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00039', 'silver', 'CELL201', 1),
-# MAGIC         ('CI-00039', 'silver', 'CELL202', 2),
-# MAGIC         ('CI-00039', 'silver', 'CELL203', 3),
-# MAGIC         ('CI-00039', 'silver', 'CELL204', 4),
-# MAGIC         ('CI-00039', 'silver', 'CELL205', 5),
-# MAGIC         ('CI-00039', 'silver', 'CELL214', 6),
-# MAGIC         ('CI-00039', 'silver', 'CELL215', 7),
-# MAGIC         ('CI-00039', 'silver', 'CELL216', 8),
-# MAGIC         ('CI-00039', 'silver', 'CELL217', 9),
-# MAGIC         ('CI-00039', 'silver', 'CELL211', 10),
-# MAGIC         ('CI-00039', 'silver', 'CELL212', 11),
-# MAGIC         ('CI-00039', 'silver', 'CELL213', 12),
-# MAGIC         ('CI-00039', 'silver', 'CELL206', 13),
-# MAGIC         ('CI-00039', 'silver', 'CELL207', 14),
-# MAGIC         ('CI-00039', 'silver', 'CELL208', 15),
-# MAGIC         ('CI-00039', 'silver', 'CELL209', 16),
-# MAGIC         ('CI-00039', 'silver', 'CELL210', 17),
-# MAGIC         ('CI-00039', 'silver', 'CELL219', 18),
-# MAGIC         ('CI-00039', 'silver', 'CELL109', 19),
-# MAGIC         ('CI-00039', 'bangle', 'CELL201', 1),
-# MAGIC         ('CI-00039', 'bangle', 'CELL202', 2),
-# MAGIC         ('CI-00039', 'bangle', 'CELL203', 3),
-# MAGIC         ('CI-00039', 'bangle', 'CELL204', 4),
-# MAGIC         ('CI-00039', 'bangle', 'CELL205', 5),
-# MAGIC         ('CI-00039', 'bangle', 'CELL214', 6),
-# MAGIC         ('CI-00039', 'bangle', 'CELL215', 7),
-# MAGIC         ('CI-00039', 'bangle', 'CELL216', 8),
-# MAGIC         ('CI-00039', 'bangle', 'CELL217', 9),
-# MAGIC         ('CI-00039', 'bangle', 'CELL103', 10),
-# MAGIC         ('CI-00039', 'bangle', 'CELL109', 11),
-# MAGIC         ('CI-00039', 'bangle', 'CELL211', 12),
-# MAGIC         ('CI-00039', 'bangle', 'CELL212', 13),
-# MAGIC         ('CI-00039', 'bangle', 'CELL213', 14),
-# MAGIC         ('CI-00039', 'bangle', 'CELL206', 15),
-# MAGIC         ('CI-00039', 'bangle', 'CELL207', 16),
-# MAGIC         ('CI-00039', 'bangle', 'CELL208', 17),
-# MAGIC         ('CI-00039', 'bangle', 'CELL209', 18),
-# MAGIC         ('CI-00039', 'bangle', 'CELL210', 19),
-# MAGIC         ('CI-00039', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00039', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00039', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- VIVIENNE WESTWOOD JEWELLERY
-# MAGIC         ('CI-00040', 'gold', 'CELL109', 1),
-# MAGIC         ('CI-00040', 'silver', 'CELL211', 1),
-# MAGIC         ('CI-00040', 'silver', 'CELL212', 2),
-# MAGIC         ('CI-00040', 'silver', 'CELL213', 3),
-# MAGIC         ('CI-00040', 'silver', 'CELL214', 4),
-# MAGIC         ('CI-00040', 'silver', 'CELL215', 5),
-# MAGIC         ('CI-00040', 'silver', 'CELL216', 6),
-# MAGIC         ('CI-00040', 'silver', 'CELL217', 7),
-# MAGIC         ('CI-00040', 'silver', 'CELL219', 8),
-# MAGIC         ('CI-00040', 'silver', 'CELL206', 9),
-# MAGIC         ('CI-00040', 'silver', 'CELL207', 10),
-# MAGIC         ('CI-00040', 'silver', 'CELL208', 11),
-# MAGIC         ('CI-00040', 'silver', 'CELL209', 12),
-# MAGIC         ('CI-00040', 'silver', 'CELL210', 13),
-# MAGIC         ('CI-00040', 'silver', 'CELL201', 14),
-# MAGIC         ('CI-00040', 'silver', 'CELL202', 15),
-# MAGIC         ('CI-00040', 'silver', 'CELL203', 16),
-# MAGIC         ('CI-00040', 'silver', 'CELL204', 17),
-# MAGIC         ('CI-00040', 'silver', 'CELL205', 18),
-# MAGIC         ('CI-00040', 'silver', 'CELL103', 19),
-# MAGIC         ('CI-00040', 'silver', 'CELL109', 20),
-# MAGIC         ('CI-00040', 'brass', 'CELL211', 1),
-# MAGIC         ('CI-00040', 'brass', 'CELL212', 2),
-# MAGIC         ('CI-00040', 'brass', 'CELL213', 3),
-# MAGIC         ('CI-00040', 'brass', 'CELL214', 4),
-# MAGIC         ('CI-00040', 'brass', 'CELL215', 5),
-# MAGIC         ('CI-00040', 'brass', 'CELL216', 6),
-# MAGIC         ('CI-00040', 'brass', 'CELL217', 7),
-# MAGIC         ('CI-00040', 'brass', 'CELL219', 8),
-# MAGIC         ('CI-00040', 'brass', 'CELL206', 9),
-# MAGIC         ('CI-00040', 'brass', 'CELL207', 10),
-# MAGIC         ('CI-00040', 'brass', 'CELL208', 11),
-# MAGIC         ('CI-00040', 'brass', 'CELL209', 12),
-# MAGIC         ('CI-00040', 'brass', 'CELL210', 13),
-# MAGIC         ('CI-00040', 'brass', 'CELL201', 14),
-# MAGIC         ('CI-00040', 'brass', 'CELL202', 15),
-# MAGIC         ('CI-00040', 'brass', 'CELL203', 16),
-# MAGIC         ('CI-00040', 'brass', 'CELL204', 17),
-# MAGIC         ('CI-00040', 'brass', 'CELL205', 18),
-# MAGIC         ('CI-00040', 'bangle', 'CELL206', 1),
-# MAGIC         ('CI-00040', 'bangle', 'CELL207', 2),
-# MAGIC         ('CI-00040', 'bangle', 'CELL208', 3),
-# MAGIC         ('CI-00040', 'bangle', 'CELL209', 4),
-# MAGIC         ('CI-00040', 'bangle', 'CELL210', 5),
-# MAGIC         ('CI-00040', 'bangle', 'CELL201', 6),
-# MAGIC         ('CI-00040', 'bangle', 'CELL202', 7),
-# MAGIC         ('CI-00040', 'bangle', 'CELL203', 8),
-# MAGIC         ('CI-00040', 'bangle', 'CELL204', 9),
-# MAGIC         ('CI-00040', 'bangle', 'CELL205', 10),
-# MAGIC         ('CI-00040', 'bangle', 'CELL103', 11),
-# MAGIC         ('CI-00040', 'bangle', 'CELL109', 12),
-# MAGIC         ('CI-00040', 'bangle', 'CELL214', 13),
-# MAGIC         ('CI-00040', 'bangle', 'CELL215', 14),
-# MAGIC         ('CI-00040', 'bangle', 'CELL216', 15),
-# MAGIC         ('CI-00040', 'bangle', 'CELL217', 16),
-# MAGIC         ('CI-00040', 'bangle', 'CELL211', 17),
-# MAGIC         ('CI-00040', 'bangle', 'CELL212', 18),
-# MAGIC         ('CI-00040', 'bangle', 'CELL213', 19),
-# MAGIC         ('CI-00040', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00040', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00040', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- ASPINAL OF LONDON
-# MAGIC         ('CI-00042', 'silver', 'CELL203', 1),
-# MAGIC         ('CI-00042', 'silver', 'CELL201', 2),
-# MAGIC         ('CI-00042', 'silver', 'CELL204', 3),
-# MAGIC         ('CI-00042', 'silver', 'CELL205', 4),
-# MAGIC         ('CI-00042', 'silver', 'CELL211', 5),
-# MAGIC         ('CI-00042', 'silver', 'CELL212', 6),
-# MAGIC         ('CI-00042', 'silver', 'CELL213', 7),
-# MAGIC         ('CI-00042', 'silver', 'CELL214', 8),
-# MAGIC         ('CI-00042', 'silver', 'CELL215', 9),
-# MAGIC         ('CI-00042', 'silver', 'CELL216', 10),
-# MAGIC         ('CI-00042', 'silver', 'CELL217', 11),
-# MAGIC         ('CI-00042', 'silver', 'CELL219', 12),
-# MAGIC         ('CI-00042', 'silver', 'CELL206', 13),
-# MAGIC         ('CI-00042', 'silver', 'CELL208', 14),
-# MAGIC         ('CI-00042', 'silver', 'CELL210', 15),
-# MAGIC         ('CI-00042', 'silver', 'CELL209', 16),
-# MAGIC         ('CI-00042', 'silver', 'CELL207', 17),
-# MAGIC         ('CI-00042', 'silver', 'CELL103', 18),
-# MAGIC         ('CI-00042', 'silver', 'CELL109', 19),
-# MAGIC         ('CI-00042', 'bangle', 'CELL211', 1),
-# MAGIC         ('CI-00042', 'bangle', 'CELL212', 2),
-# MAGIC         ('CI-00042', 'bangle', 'CELL213', 3),
-# MAGIC         ('CI-00042', 'bangle', 'CELL214', 4),
-# MAGIC         ('CI-00042', 'bangle', 'CELL215', 5),
-# MAGIC         ('CI-00042', 'bangle', 'CELL216', 6),
-# MAGIC         ('CI-00042', 'bangle', 'CELL217', 7),
-# MAGIC         ('CI-00042', 'bangle', 'CELL201', 8),
-# MAGIC         ('CI-00042', 'bangle', 'CELL202', 9),
-# MAGIC         ('CI-00042', 'bangle', 'CELL203', 10),
-# MAGIC         ('CI-00042', 'bangle', 'CELL204', 11),
-# MAGIC         ('CI-00042', 'bangle', 'CELL205', 12),
-# MAGIC         ('CI-00042', 'bangle', 'CELL103', 13),
-# MAGIC         ('CI-00042', 'bangle', 'CELL109', 14),
-# MAGIC         ('CI-00042', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00042', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00042', 'bangle-lock', 'CELL210', 3),
-# MAGIC         ('CI-00042', 'bangle-lock', 'CELL208', 4),
-# MAGIC         -- RAG&BONE
-# MAGIC         ('CI-00044', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00044', 'silver', 'CELL205', 1),
-# MAGIC         ('CI-00044', 'silver', 'CELL201', 2),
-# MAGIC         ('CI-00044', 'silver', 'CELL202', 3),
-# MAGIC         ('CI-00044', 'silver', 'CELL203', 4),
-# MAGIC         ('CI-00044', 'silver', 'CELL204', 5),
-# MAGIC         ('CI-00044', 'silver', 'CELL214', 6),
-# MAGIC         ('CI-00044', 'silver', 'CELL215', 7),
-# MAGIC         ('CI-00044', 'silver', 'CELL216', 8),
-# MAGIC         ('CI-00044', 'silver', 'CELL217', 9),
-# MAGIC         ('CI-00044', 'silver', 'CELL211', 10),
-# MAGIC         ('CI-00044', 'silver', 'CELL212', 11),
-# MAGIC         ('CI-00044', 'silver', 'CELL213', 12),
-# MAGIC         ('CI-00044', 'silver', 'CELL206', 13),
-# MAGIC         ('CI-00044', 'silver', 'CELL207', 14),
-# MAGIC         ('CI-00044', 'silver', 'CELL208', 15),
-# MAGIC         ('CI-00044', 'silver', 'CELL209', 16),
-# MAGIC         ('CI-00044', 'silver', 'CELL210', 17),
-# MAGIC         ('CI-00044', 'silver', 'CELL219', 18),
-# MAGIC         ('CI-00044', 'silver', 'CELL109', 19),
-# MAGIC         ('CI-00044', 'bangle', 'CELL201', 1),
-# MAGIC         ('CI-00044', 'bangle', 'CELL202', 2),
-# MAGIC         ('CI-00044', 'bangle', 'CELL203', 3),
-# MAGIC         ('CI-00044', 'bangle', 'CELL204', 4),
-# MAGIC         ('CI-00044', 'bangle', 'CELL205', 5),
-# MAGIC         ('CI-00044', 'bangle', 'CELL214', 6),
-# MAGIC         ('CI-00044', 'bangle', 'CELL215', 7),
-# MAGIC         ('CI-00044', 'bangle', 'CELL216', 8),
-# MAGIC         ('CI-00044', 'bangle', 'CELL217', 9),
-# MAGIC         ('CI-00044', 'bangle', 'CELL103', 10),
-# MAGIC         ('CI-00044', 'bangle', 'CELL109', 11),
-# MAGIC         ('CI-00044', 'bangle', 'CELL211', 12),
-# MAGIC         ('CI-00044', 'bangle', 'CELL212', 13),
-# MAGIC         ('CI-00044', 'bangle', 'CELL213', 14),
-# MAGIC         ('CI-00044', 'bangle', 'CELL206', 15),
-# MAGIC         ('CI-00044', 'bangle', 'CELL207', 16),
-# MAGIC         ('CI-00044', 'bangle', 'CELL208', 17),
-# MAGIC         ('CI-00044', 'bangle', 'CELL209', 18),
-# MAGIC         ('CI-00044', 'bangle', 'CELL210', 19),
-# MAGIC         ('CI-00044', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00044', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00044', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- AGATHA PARIS
-# MAGIC         ('CI-00047', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00047', 'silver', 'CELL201', 1),
-# MAGIC         ('CI-00047', 'silver', 'CELL202', 2),
-# MAGIC         ('CI-00047', 'silver', 'CELL203', 3),
-# MAGIC         ('CI-00047', 'silver', 'CELL204', 4),
-# MAGIC         ('CI-00047', 'silver', 'CELL205', 5),
-# MAGIC         ('CI-00047', 'silver', 'CELL214', 6),
-# MAGIC         ('CI-00047', 'silver', 'CELL215', 7),
-# MAGIC         ('CI-00047', 'silver', 'CELL216', 8),
-# MAGIC         ('CI-00047', 'silver', 'CELL217', 9),
-# MAGIC         ('CI-00047', 'silver', 'CELL211', 10),
-# MAGIC         ('CI-00047', 'silver', 'CELL212', 11),
-# MAGIC         ('CI-00047', 'silver', 'CELL213', 12),
-# MAGIC         ('CI-00047', 'silver', 'CELL206', 13),
-# MAGIC         ('CI-00047', 'silver', 'CELL207', 14),
-# MAGIC         ('CI-00047', 'silver', 'CELL208', 15),
-# MAGIC         ('CI-00047', 'silver', 'CELL209', 16),
-# MAGIC         ('CI-00047', 'silver', 'CELL210', 17),
-# MAGIC         ('CI-00047', 'silver', 'CELL219', 18),
-# MAGIC         ('CI-00047', 'silver', 'CELL109', 19),
-# MAGIC         ('CI-00047', 'brass', 'CELL201', 1),
-# MAGIC         ('CI-00047', 'brass', 'CELL202', 2),
-# MAGIC         ('CI-00047', 'brass', 'CELL203', 3),
-# MAGIC         ('CI-00047', 'brass', 'CELL204', 4),
-# MAGIC         ('CI-00047', 'brass', 'CELL205', 5),
-# MAGIC         ('CI-00047', 'brass', 'CELL214', 6),
-# MAGIC         ('CI-00047', 'brass', 'CELL215', 7),
-# MAGIC         ('CI-00047', 'brass', 'CELL216', 8),
-# MAGIC         ('CI-00047', 'brass', 'CELL217', 9),
-# MAGIC         ('CI-00047', 'brass', 'CELL211', 10),
-# MAGIC         ('CI-00047', 'brass', 'CELL212', 11),
-# MAGIC         ('CI-00047', 'brass', 'CELL213', 12),
-# MAGIC         ('CI-00047', 'brass', 'CELL206', 13),
-# MAGIC         ('CI-00047', 'brass', 'CELL207', 14),
-# MAGIC         ('CI-00047', 'brass', 'CELL208', 15),
-# MAGIC         ('CI-00047', 'brass', 'CELL209', 16),
-# MAGIC         ('CI-00047', 'brass', 'CELL210', 17),
-# MAGIC         ('CI-00047', 'brass', 'CELL219', 18),
-# MAGIC         ('CI-00047', 'bangle', 'CELL201', 1),
-# MAGIC         ('CI-00047', 'bangle', 'CELL202', 2),
-# MAGIC         ('CI-00047', 'bangle', 'CELL203', 3),
-# MAGIC         ('CI-00047', 'bangle', 'CELL204', 4),
-# MAGIC         ('CI-00047', 'bangle', 'CELL205', 5),
-# MAGIC         ('CI-00047', 'bangle', 'CELL214', 6),
-# MAGIC         ('CI-00047', 'bangle', 'CELL215', 7),
-# MAGIC         ('CI-00047', 'bangle', 'CELL216', 8),
-# MAGIC         ('CI-00047', 'bangle', 'CELL217', 9),
-# MAGIC         ('CI-00047', 'bangle', 'CELL103', 10),
-# MAGIC         ('CI-00047', 'bangle', 'CELL109', 11),
-# MAGIC         ('CI-00047', 'bangle', 'CELL211', 12),
-# MAGIC         ('CI-00047', 'bangle', 'CELL212', 13),
-# MAGIC         ('CI-00047', 'bangle', 'CELL213', 14),
-# MAGIC         ('CI-00047', 'bangle', 'CELL206', 15),
-# MAGIC         ('CI-00047', 'bangle', 'CELL207', 16),
-# MAGIC         ('CI-00047', 'bangle', 'CELL208', 17),
-# MAGIC         ('CI-00047', 'bangle', 'CELL209', 18),
-# MAGIC         ('CI-00047', 'bangle', 'CELL210', 19),
-# MAGIC         ('CI-00047', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00047', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00047', 'bangle-lock', 'CELL210', 3),
-# MAGIC         -- ABBOTT LYON
-# MAGIC         ('CI-00048', 'gold', 'CELL103', 1),
-# MAGIC         ('CI-00048', 'silver', 'CELL205', 1),
-# MAGIC         ('CI-00048', 'silver', 'CELL201', 2),
-# MAGIC         ('CI-00048', 'silver', 'CELL202', 3),
-# MAGIC         ('CI-00048', 'silver', 'CELL203', 4),
-# MAGIC         ('CI-00048', 'silver', 'CELL204', 5),
-# MAGIC         ('CI-00048', 'silver', 'CELL214', 6),
-# MAGIC         ('CI-00048', 'silver', 'CELL215', 7),
-# MAGIC         ('CI-00048', 'silver', 'CELL216', 8),
-# MAGIC         ('CI-00048', 'silver', 'CELL217', 9),
-# MAGIC         ('CI-00048', 'silver', 'CELL211', 10),
-# MAGIC         ('CI-00048', 'silver', 'CELL212', 11),
-# MAGIC         ('CI-00048', 'silver', 'CELL213', 12),
-# MAGIC         ('CI-00048', 'silver', 'CELL206', 13),
-# MAGIC         ('CI-00048', 'silver', 'CELL207', 14),
-# MAGIC         ('CI-00048', 'silver', 'CELL208', 15),
-# MAGIC         ('CI-00048', 'silver', 'CELL209', 16),
-# MAGIC         ('CI-00048', 'silver', 'CELL210', 17),
-# MAGIC         ('CI-00048', 'silver', 'CELL219', 18),
-# MAGIC         ('CI-00048', 'silver', 'CELL109', 19),
-# MAGIC         ('CI-00048', 'bangle', 'CELL201', 1),
-# MAGIC         ('CI-00048', 'bangle', 'CELL202', 2),
-# MAGIC         ('CI-00048', 'bangle', 'CELL203', 3),
-# MAGIC         ('CI-00048', 'bangle', 'CELL204', 4),
-# MAGIC         ('CI-00048', 'bangle', 'CELL205', 5),
-# MAGIC         ('CI-00048', 'bangle', 'CELL214', 6),
-# MAGIC         ('CI-00048', 'bangle', 'CELL215', 7),
-# MAGIC         ('CI-00048', 'bangle', 'CELL216', 8),
-# MAGIC         ('CI-00048', 'bangle', 'CELL217', 9),
-# MAGIC         ('CI-00048', 'bangle', 'CELL103', 10),
-# MAGIC         ('CI-00048', 'bangle', 'CELL109', 11),
-# MAGIC         ('CI-00048', 'bangle', 'CELL211', 12),
-# MAGIC         ('CI-00048', 'bangle', 'CELL212', 13),
-# MAGIC         ('CI-00048', 'bangle', 'CELL213', 14),
-# MAGIC         ('CI-00048', 'bangle', 'CELL206', 15),
-# MAGIC         ('CI-00048', 'bangle', 'CELL207', 16),
-# MAGIC         ('CI-00048', 'bangle', 'CELL208', 17),
-# MAGIC         ('CI-00048', 'bangle', 'CELL209', 18),
-# MAGIC         ('CI-00048', 'bangle', 'CELL210', 19),
-# MAGIC         ('CI-00048', 'bangle-lock', 'CELL207', 1),
-# MAGIC         ('CI-00048', 'bangle-lock', 'CELL209', 2),
-# MAGIC         ('CI-00048', 'bangle-lock', 'CELL210', 3)
-# MAGIC AS t(customer_no, material_type, cell_code, priority_rank);
-# MAGIC 
-# MAGIC -- 2. `gold_scheduling_category_rule` (6 BANGLE rules)
-# MAGIC 
-# MAGIC CREATE OR REPLACE TABLE Gold_Production_Lakehouse.planning.gold_scheduling_category_rule
-# MAGIC USING DELTA
-# MAGIC AS
-# MAGIC SELECT
-# MAGIC     product_category, cell_code, priority_rank,
-# MAGIC     CASE
-# MAGIC         WHEN cell_code IN ('CELL105','CELL109')                                         THEN 'PRODLINE1'
-# MAGIC         WHEN cell_code IN ('CELL201','CELL202','CELL203','CELL204','CELL205','CELL218') THEN 'PRODLINE2'
-# MAGIC         WHEN cell_code IN ('CELL103','CELL104','CELL206','CELL207','CELL208','CELL209','CELL210','CELL219','CELL220') THEN 'PRODLINE3'
-# MAGIC         WHEN cell_code IN ('CELL211','CELL212','CELL213')                               THEN 'PRODLINE4'
-# MAGIC         WHEN cell_code IN ('CELL214','CELL215','CELL216','CELL217')                     THEN 'PRODLINE5'
-# MAGIC         ELSE 'UNKNOWN'
-# MAGIC     END AS production_line,
-# MAGIC     current_timestamp() AS _load_timestamp
-# MAGIC FROM VALUES
-# MAGIC         ('BANGLE', 'CELL207', 1),
-# MAGIC         ('BANGLE', 'CELL208', 2),
-# MAGIC         ('BANGLE', 'CELL209', 3),
-# MAGIC         ('BANGLE', 'CELL210', 4),
-# MAGIC         ('BANGLE', 'CELL211', 5),
-# MAGIC         ('BANGLE', 'CELL217', 6)
-# MAGIC AS t(product_category, cell_code, priority_rank);
-# MAGIC 
-# MAGIC -- 3. `gold_scheduling_additional_rule` (39 rules, **incl. default**)
-# MAGIC 
-# MAGIC CREATE OR REPLACE TABLE Gold_Production_Lakehouse.planning.gold_scheduling_additional_rule
-# MAGIC USING DELTA
-# MAGIC AS
-# MAGIC SELECT
-# MAGIC     rule_name,
-# MAGIC     cell_code,
-# MAGIC     CAST(is_allowed AS BOOLEAN) AS is_allowed,
-# MAGIC     CASE
-# MAGIC         WHEN cell_code IN ('CELL105','CELL109')                                         THEN 'PRODLINE1'
-# MAGIC         WHEN cell_code IN ('CELL201','CELL202','CELL203','CELL204','CELL205','CELL218') THEN 'PRODLINE2'
-# MAGIC         WHEN cell_code IN ('CELL103','CELL104','CELL206','CELL207','CELL208','CELL209','CELL210','CELL219','CELL220') THEN 'PRODLINE3'
-# MAGIC         WHEN cell_code IN ('CELL211','CELL212','CELL213')                               THEN 'PRODLINE4'
-# MAGIC         WHEN cell_code IN ('CELL214','CELL215','CELL216','CELL217')                     THEN 'PRODLINE5'
-# MAGIC         ELSE 'UNKNOWN'
-# MAGIC     END AS production_line,
-# MAGIC     current_timestamp() AS _load_timestamp
-# MAGIC FROM VALUES
-# MAGIC         -- OXIDIZE
-# MAGIC         ('OXIDIZE', 'CELL105', true),
-# MAGIC         ('OXIDIZE', 'CELL109', true),
-# MAGIC         ('OXIDIZE', 'CELL207', true),
-# MAGIC         ('OXIDIZE', 'CELL208', true),
-# MAGIC         ('OXIDIZE', 'CELL209', true),
-# MAGIC         ('OXIDIZE', 'CELL210', true),
-# MAGIC         ('OXIDIZE', 'CELL211', true),
-# MAGIC         ('OXIDIZE', 'CELL212', true),
-# MAGIC         ('OXIDIZE', 'CELL213', true),
-# MAGIC         ('OXIDIZE', 'CELL214', true),
-# MAGIC         ('OXIDIZE', 'CELL215', true),
-# MAGIC         ('OXIDIZE', 'CELL216', true),
-# MAGIC         ('OXIDIZE', 'CELL219', true),
-# MAGIC 
-# MAGIC         -- BANGLE_LOCK
-# MAGIC         ('BANGLE_LOCK', 'CELL207', true),
-# MAGIC         ('BANGLE_LOCK', 'CELL208', true),
-# MAGIC         ('BANGLE_LOCK', 'CELL209', true),
-# MAGIC         ('BANGLE_LOCK', 'CELL210', true),
-# MAGIC         ('BANGLE_LOCK', 'CELL211', true),
-# MAGIC 
-# MAGIC         -- BANGLE_LOCK_T2
-# MAGIC         ('BANGLE_LOCK_T2', 'CELL209', true),
-# MAGIC 
-# MAGIC         -- default
-# MAGIC         ('default', 'CELL105', true),
-# MAGIC         ('default', 'CELL109', true),
-# MAGIC         ('default', 'CELL201', true),
-# MAGIC         ('default', 'CELL202', true),
-# MAGIC         ('default', 'CELL203', true),
-# MAGIC         ('default', 'CELL204', true),
-# MAGIC         ('default', 'CELL205', true),
-# MAGIC         ('default', 'CELL206', true),
-# MAGIC         ('default', 'CELL207', true),
-# MAGIC         ('default', 'CELL208', true),
-# MAGIC         ('default', 'CELL209', true),
-# MAGIC         ('default', 'CELL210', true),
-# MAGIC         ('default', 'CELL211', true),
-# MAGIC         ('default', 'CELL212', true),
-# MAGIC         ('default', 'CELL213', true),
-# MAGIC         ('default', 'CELL214', true),
-# MAGIC         ('default', 'CELL215', true),
-# MAGIC         ('default', 'CELL216', true),
-# MAGIC         ('default', 'CELL217', true),
-# MAGIC         ('default', 'CELL219', true)
-# MAGIC AS t(rule_name, cell_code, is_allowed);
-# MAGIC 
-# MAGIC -- 4. `gold_scheduling_customer_override`
-# MAGIC 
-# MAGIC CREATE OR REPLACE TABLE Gold_Production_Lakehouse.planning.gold_scheduling_customer_override
-# MAGIC USING DELTA
-# MAGIC AS
-# MAGIC SELECT
-# MAGIC     customer_no, material_type, forced_cell, applies_to, reason,
-# MAGIC     CASE
-# MAGIC         WHEN forced_cell IN ('CELL105','CELL109')                                         THEN 'PRODLINE1'
-# MAGIC         WHEN forced_cell IN ('CELL201','CELL202','CELL203','CELL204','CELL205','CELL218') THEN 'PRODLINE2'
-# MAGIC         WHEN forced_cell IN ('CELL103','CELL104','CELL206','CELL207','CELL208','CELL209','CELL210','CELL219','CELL220') THEN 'PRODLINE3'
-# MAGIC         WHEN forced_cell IN ('CELL211','CELL212','CELL213')                               THEN 'PRODLINE4'
-# MAGIC         WHEN forced_cell IN ('CELL214','CELL215','CELL216','CELL217')                     THEN 'PRODLINE5'
-# MAGIC         ELSE 'UNKNOWN'
-# MAGIC     END AS production_line,
-# MAGIC     current_timestamp() AS _load_timestamp
-# MAGIC FROM VALUES
-# MAGIC     ('CI-00040', 'gold', 'CELL109', 'ALL', 'VW gold always routes to CELL109 (Normal & SP)')
-# MAGIC AS t(customer_no, material_type, forced_cell, applies_to, reason);
-# MAGIC 
-# MAGIC -- ============================================================
-# MAGIC -- 5. v_gold_scheduling_customer_rule_active
-# MAGIC -- ============================================================
-# MAGIC CREATE OR REPLACE VIEW Gold_Production_Lakehouse.planning.v_gold_scheduling_customer_rule_active
-# MAGIC AS
-# MAGIC SELECT
-# MAGIC     r.customer_no,
-# MAGIC     c.`Name` AS customer_name,
-# MAGIC     c.`DSVC Branch ID` AS customer_branch,
-# MAGIC     r.material_type,
-# MAGIC     r.cell_code,
-# MAGIC     r.priority_rank,
-# MAGIC     r.production_line,
-# MAGIC     r._load_timestamp
-# MAGIC FROM Gold_Production_Lakehouse.planning.gold_scheduling_customer_rule r
-# MAGIC INNER JOIN Silver_BC_Lakehouse.bc.Customer c
-# MAGIC     ON c.`No.` = r.customer_no
-# MAGIC WHERE c.`Blocked` IS NULL;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============================================================
-# MAGIC -- 6. v_gold_scheduling_item_category
-# MAGIC -- ============================================================
-# MAGIC CREATE OR REPLACE VIEW Gold_Production_Lakehouse.planning.v_gold_scheduling_item_category
-# MAGIC AS
-# MAGIC SELECT
-# MAGIC     i.`No.` AS item_no,
-# MAGIC     i.`Description` AS item_description,
-# MAGIC     i.`Item Category Code` AS item_category_code,
-# MAGIC     i.`Product Type` AS product_type,
-# MAGIC     i.`Sub Product Type` AS sub_product_type,
-# MAGIC     i.`Skill Level` AS skill_level,
-# MAGIC 
-# MAGIC     CASE
-# MAGIC         WHEN UPPER(TRIM(i.`Product Type`)) = 'BANGLE'
-# MAGIC              AND UPPER(TRIM(COALESCE(i.`Sub Product Type`, ''))) IN ('BG-LOCK-TNG', 'BG-LOCK-PSH')
-# MAGIC             THEN 'BANGLE-LOCK'
-# MAGIC         WHEN UPPER(TRIM(i.`Product Type`)) = 'BANGLE' THEN 'BANGLE'
-# MAGIC         ELSE 'OTHER'
-# MAGIC     END AS scheduling_category,
-# MAGIC 
-# MAGIC     CASE
-# MAGIC         WHEN UPPER(TRIM(i.`Product Type`)) = 'BANGLE'
-# MAGIC              AND UPPER(TRIM(COALESCE(i.`Sub Product Type`, ''))) IN ('BG-LOCK-TNG', 'BG-LOCK-PSH')
-# MAGIC             THEN 'bangle-lock'
-# MAGIC         WHEN UPPER(TRIM(i.`Product Type`)) = 'BANGLE' THEN 'bangle'
-# MAGIC         ELSE NULL
-# MAGIC     END AS bangle_material_type,
-# MAGIC 
-# MAGIC     current_timestamp() AS _load_timestamp
-# MAGIC FROM Silver_BC_Lakehouse.bc.Item i
-# MAGIC WHERE i.`Blocked` = '0';
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============================================================
-# MAGIC -- 7. v_gold_scheduling_cell_pool
-# MAGIC -- ============================================================
-# MAGIC CREATE OR REPLACE VIEW Gold_Production_Lakehouse.planning.v_gold_scheduling_cell_pool
-# MAGIC AS
-# MAGIC SELECT
-# MAGIC     ic.item_no,
-# MAGIC     ic.scheduling_category,
-# MAGIC     ic.bangle_material_type,
-# MAGIC     cr.customer_no,
-# MAGIC     cr.customer_name,
-# MAGIC     cr.material_type,
-# MAGIC     cr.cell_code,
-# MAGIC     cr.priority_rank,
-# MAGIC     cr.production_line
-# MAGIC FROM Gold_Production_Lakehouse.planning.v_gold_scheduling_item_category ic
-# MAGIC CROSS JOIN Gold_Production_Lakehouse.planning.v_gold_scheduling_customer_rule_active cr
-# MAGIC WHERE
-# MAGIC     (ic.bangle_material_type IS NOT NULL AND cr.material_type = ic.bangle_material_type)
-# MAGIC     OR ic.bangle_material_type IS NULL;
-# MAGIC 
-# MAGIC 
-# MAGIC 
-# MAGIC -- 8. Smoke tests
-# MAGIC     -- 8.1 Row counts for all tables/views
-# MAGIC 
-# MAGIC SELECT 'customer_rule'        AS object_name, COUNT(*) AS row_count FROM Gold_Production_Lakehouse.planning.gold_scheduling_customer_rule
-# MAGIC UNION ALL SELECT 'category_rule',     COUNT(*) FROM Gold_Production_Lakehouse.planning.gold_scheduling_category_rule
-# MAGIC UNION ALL SELECT 'additional_rule',   COUNT(*) FROM Gold_Production_Lakehouse.planning.gold_scheduling_additional_rule
-# MAGIC UNION ALL SELECT 'customer_override', COUNT(*) FROM Gold_Production_Lakehouse.planning.gold_scheduling_customer_override
-# MAGIC UNION ALL SELECT 'v_cust_rule_active',COUNT(*) FROM Gold_Production_Lakehouse.planning.v_gold_scheduling_customer_rule_active
-# MAGIC UNION ALL SELECT 'v_item_category',   COUNT(*) FROM Gold_Production_Lakehouse.planning.v_gold_scheduling_item_category
-# MAGIC UNION ALL SELECT 'v_cell_pool',       COUNT(*) FROM Gold_Production_Lakehouse.planning.v_gold_scheduling_cell_pool
-# MAGIC ORDER BY object_name;
-# MAGIC 
-# MAGIC     -- 8.2 Additional rule breakdown
-# MAGIC 
-# MAGIC SELECT rule_name, COUNT(*) AS cell_count, COLLECT_LIST(cell_code) AS cells
-# MAGIC FROM Gold_Production_Lakehouse.planning.gold_scheduling_additional_rule
-# MAGIC WHERE is_allowed = TRUE
-# MAGIC GROUP BY rule_name
-# MAGIC ORDER BY
-# MAGIC     CASE rule_name
-# MAGIC         WHEN 'OXIDIZE' THEN 1
-# MAGIC         WHEN 'BANGLE_LOCK' THEN 2
-# MAGIC         WHEN 'BANGLE_LOCK_T2' THEN 3
-# MAGIC         WHEN 'default' THEN 4
-# MAGIC         ELSE 99
-# MAGIC     END;
-# MAGIC 
-# MAGIC     -- 8.3 VW gold override is in place
-# MAGIC 
-# MAGIC SELECT customer_no, material_type, forced_cell, applies_to, reason
-# MAGIC FROM Gold_Production_Lakehouse.planning.gold_scheduling_customer_override;
-# MAGIC     -- 8.4 Sample: VW silver pool order (verify ordering matches Editor)
-# MAGIC 
-# MAGIC SELECT priority_rank, cell_code, production_line
-# MAGIC FROM Gold_Production_Lakehouse.planning.v_gold_scheduling_customer_rule_active
-# MAGIC WHERE customer_no = 'CI-00040' AND material_type = 'silver'
-# MAGIC ORDER BY priority_rank;
+# MAGIC         WHEN p.scheduled_wax_date IS NOT NULL THEN 'PLANNING_WAX_SCHEDULE'
+# MAGIC         WHEN f.created_on_date    IS NOT NULL THEN 'PRODUCTION_STATUS_CREATED_ON'
+# MAGIC         ELSE 'NO_SOURCE'
+# MAGIC     END                                                  AS scheduled_wax_date_source,
+# MAGIC     p.casting_date,
+# MAGIC     p.wax_pro_id_first    AS wax_pro_id,
+# MAGIC     p.wax_pro_count       AS split_chunk_count,
+# MAGIC     CURRENT_TIMESTAMP()   AS table_built_at
+# MAGIC FROM universe u
+# MAGIC LEFT JOIN primary_src  p ON p.cst_pro = u.cst_pro
+# MAGIC LEFT JOIN fallback_src f ON f.cst_pro = u.cst_pro;
 
 # METADATA ********************
 
