@@ -1232,7 +1232,7 @@ prod_component_cfg = {
 
 pro_weight_cfg = {
     # ---- SOURCE (Bronze Delta table path) ----
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_proweight",
+    "source_path": "abfss://Dataverse@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/cr535_proweight",
                     
     # ---- TARGET (Silver Lakehouse managed table) ----
     "target_schema": "prod",
@@ -1339,7 +1339,7 @@ pro_weight_cfg = {
 # ==============================================================
 
 wm_moldmaster_cfg = {
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/wm_moldmaster",
+    "source_path": "abfss://Dataverse@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/wm_moldmaster",
     "target_schema": "prod",
     "target_table": "silver_mold_master",
 
@@ -1481,7 +1481,7 @@ wm_moldmaster_cfg = {
 # ==============================================================
 
 wm_moldtask_cfg = {
-    "source_path": "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/wm_moldtask",
+    "source_path": "abfss://Dataverse@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/wm_moldtask",
     "target_schema": "prod",
     "target_table": "silver_mold_task",
 
@@ -1625,7 +1625,7 @@ for r in ALL_RESULTS:
 # MAGIC     wm_modificationname as wm_modification_name,          
 # MAGIC     wm_runtime as runtime,
 # MAGIC     wm_standardtime as standardtime
-# MAGIC FROM Dataverse_link.dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.wm_moldmodificationmachinecentermap LIMIT 1000
+# MAGIC FROM Dataverse.dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.wm_moldmodificationmachinecentermap LIMIT 1000
 
 # METADATA ********************
 
@@ -1682,7 +1682,7 @@ for r in ALL_RESULTS:
 # MAGIC     createdon              AS created_on,
 # MAGIC     modifiedon             AS modified_on
 # MAGIC 
-# MAGIC FROM Dataverse_link.dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.dbo.cr535_rfidvalidationerrorsproduction;
+# MAGIC FROM Dataverse.dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.dbo.cr535_rfidvalidationerrorsproduction;
 
 # METADATA ********************
 

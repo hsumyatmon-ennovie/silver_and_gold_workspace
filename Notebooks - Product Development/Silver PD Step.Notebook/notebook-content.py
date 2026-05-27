@@ -46,7 +46,7 @@
 # CELL ********************
 
 df = spark.read.format("delta").load(
-    "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/"
+    "abfss://Dataverse@onelake.dfs.fabric.microsoft.com/"
     "dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/"
     "Tables/dts_npd_cadroutingsteps"
 )

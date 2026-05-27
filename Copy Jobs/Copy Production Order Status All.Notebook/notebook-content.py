@@ -352,13 +352,13 @@ def run():
 
 # CELL ********************
 
-BRONZE_PATH    = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/"
+BRONZE_PATH    = "abfss://Dataverse@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/"
 BRONZE_TABLE   = BRONZE_PATH + "cr535_dsvcproductionorderstatus"
 
-STAGING_PATH   = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Files/silver_staging/"   # Where we drop the single Parquet for Warehouse COPY
+STAGING_PATH   = "abfss://Dataverse@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Files/silver_staging/"   # Where we drop the single Parquet for Warehouse COPY
 STAGING_ROOT   = STAGING_PATH +  "silver_sync/" + "silver_production_status_all"
 
-WATERMARK_PATH  = "abfss://Dataverse_link@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/metadata/"     # Delta table with column: last_processed_ts TIMESTAMP
+WATERMARK_PATH  = "abfss://Dataverse@onelake.dfs.fabric.microsoft.com/dataverse_ennovieprodu_cds2_workspace_unq09bbc58ecdb9ee119073000d3a099.Lakehouse/Tables/metadata/"     # Delta table with column: last_processed_ts TIMESTAMP
 WATERMARK_TBL  = WATERMARK_PATH + "silver_wm_prod_production_status_all"
 BACKFILL_FROM  = "2019-01-01"                               # earliest modifiedon to consider (safety)
 CHUNK_MONTHS   = 1                                          # backfill chunk size (months) — balances CUs vs speed
