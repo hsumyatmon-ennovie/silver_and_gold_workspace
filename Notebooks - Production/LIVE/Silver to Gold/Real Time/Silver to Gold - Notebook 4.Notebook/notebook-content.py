@@ -1576,7 +1576,6 @@ else:
 # MAGIC 
 # MAGIC WITH t_raw AS (
 # MAGIC     SELECT
-# MAGIC         `Routing No.`           AS item_no,
 # MAGIC         `Routing Reference No.` AS prod_order_line_no,
 # MAGIC         `Operation No.`         AS operation_no,
 # MAGIC         `Type`                  AS operation_type,
@@ -1601,24 +1600,38 @@ else:
 # MAGIC     FROM t_raw
 # MAGIC ),
 # MAGIC 
+# MAGIC -- NEW: item_no source from Prod Order Line
+# MAGIC pol AS (
+# MAGIC     SELECT
+# MAGIC         `Status`          AS prod_order_status,
+# MAGIC         `Prod. Order No.` AS prod_order_no,
+# MAGIC         `Line No.`        AS prod_order_line_no,
+# MAGIC         `Item No.`        AS item_no
+# MAGIC     FROM Silver_BC_Lakehouse.bc.`Prod Order Line`
+# MAGIC ),
+# MAGIC 
 # MAGIC src AS (
 # MAGIC     SELECT
-# MAGIC         created_on,
-# MAGIC         modified_on,
-# MAGIC         prod_order_no,
-# MAGIC         prod_order_status,
-# MAGIC         prod_order_line_no,
-# MAGIC         item_no,
-# MAGIC         operation_no,
-# MAGIC         operation_type,
-# MAGIC         routing_no,
-# MAGIC         run_time,
-# MAGIC         change_ts,
+# MAGIC         t.created_on,
+# MAGIC         t.modified_on,
+# MAGIC         t.prod_order_no,
+# MAGIC         t.prod_order_status,
+# MAGIC         t.prod_order_line_no,
+# MAGIC         pol.item_no,                       -- now sourced from Prod Order Line
+# MAGIC         t.operation_no,
+# MAGIC         t.operation_type,
+# MAGIC         t.routing_no,
+# MAGIC         t.run_time,
+# MAGIC         t.change_ts,
 # MAGIC         CASE
-# MAGIC             WHEN operation_no IS NULL THEN NULL
-# MAGIC             ELSE CAST(SPLIT(operation_no, '\\.')[0] AS INT)
+# MAGIC             WHEN t.operation_no IS NULL THEN NULL
+# MAGIC             ELSE CAST(SPLIT(t.operation_no, '\\.')[0] AS INT)
 # MAGIC         END AS operation_group
-# MAGIC     FROM t_ts
+# MAGIC     FROM t_ts t
+# MAGIC     LEFT JOIN pol
+# MAGIC         ON  t.prod_order_no       = pol.prod_order_no
+# MAGIC         AND t.prod_order_line_no  = pol.prod_order_line_no
+# MAGIC         AND t.prod_order_status   = pol.prod_order_status
 # MAGIC ),
 # MAGIC 
 # MAGIC calc AS (

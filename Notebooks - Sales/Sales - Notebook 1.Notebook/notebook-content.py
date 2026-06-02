@@ -14,6 +14,9 @@
 # META       "known_lakehouses": [
 # META         {
 # META           "id": "edcc8d2f-2684-446b-939e-eba9a81a7917"
+# META         },
+# META         {
+# META           "id": "1d620310-5acc-4534-93f9-f52f082a1887"
 # META         }
 # META       ]
 # META     }
@@ -946,24 +949,24 @@ gold_full = (
 
 # Spark (Delta) FULL REPLACE -> gold_posted_sales_inv_amount
 # Source:
-#   inv = Gold_Customer_Exp_Lakehouse.cx.gold_posted_sales_inv_join_so
-#   cur = Silver_BC_Lakehouse.bc.`Currency Exchange Rate`
-# Join:
-#   inv.Shipment_Date = cur.`Starting Date`
-#   inv.Currency_Code = cur.`Currency Code`
-# Window:
-#   rn = row_number() over (partition by invNo, Line_No order by Document_Date desc)
+#   inv  = Gold_Customer_Exp_Lakehouse.cx.gold_posted_sales_inv_join_so
+#   cur  = Silver_BC_Lakehouse.bc.`Currency Exchange Rate`
+#   item = Silver_BC_Lakehouse.bc.`Item`
 
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
 TARGET = "Gold_Customer_Exp_Lakehouse.cx.gold_posted_sales_inv_amount"
-INV_SRC = "Gold_Customer_Exp_Lakehouse.cx.gold_posted_sales_inv_join_so"
-CUR_SRC = "Silver_BC_Lakehouse.bc.`Currency Exchange Rate`"
+
+INV_SRC  = "Gold_Customer_Exp_Lakehouse.cx.gold_posted_sales_inv_join_so"
+CUR_SRC  = "Silver_BC_Lakehouse.bc.`Currency Exchange Rate`"
+ITEM_SRC = "Silver_BC_Lakehouse.bc.`Item`"
 
 d38 = lambda c: F.col(c).cast("decimal(38,10)")
 
-# 0) Create target table if not exists (Delta)
+# =========================================
+# 0) Create target table if not exists
+# =========================================
 spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {TARGET} (
     customer STRING,
@@ -977,6 +980,7 @@ CREATE TABLE IF NOT EXISTS {TARGET} (
     Salesperson_Code STRING,
     Order_No STRING,
     Gen_Prod_Posting_Group STRING,
+    Product_Type STRING,
     itemFG STRING,
     Description STRING,
     Quantity DECIMAL(38,10),
@@ -1000,49 +1004,71 @@ CREATE TABLE IF NOT EXISTS {TARGET} (
 
     rn INT,
 
-    -- tracking passthrough
     INVH_SystemCreatedAt TIMESTAMP,
     INVH_SystemModifiedAt TIMESTAMP
 )
 USING DELTA
 """)
 
+# =========================================
 # 1) Read sources
-inv = spark.table(INV_SRC).alias("inv")
-cur = spark.table(CUR_SRC).alias("cur")
+# =========================================
+inv  = spark.table(INV_SRC).alias("inv")
+cur  = spark.table(CUR_SRC).alias("cur")
+item = spark.table(ITEM_SRC).alias("item")
 
-# 2) Join currency rate (LEFT JOIN)
+# =========================================
+# 2) Join currency + item master
+# =========================================
 joined = (
     inv.join(
         cur,
         on=(
-            (F.col("inv.Shipment_Date").cast("date") == F.col("cur.`Starting Date`").cast("date")) &
-            (F.col("inv.Currency_Code") == F.col("cur.`Currency Code`"))
-            # & (F.col("cur.`Relational Currency Code`") == F.lit("THB"))  # <- add if needed
+            (F.col("inv.Shipment_Date").cast("date") ==
+             F.col("cur.`Starting Date`").cast("date"))
+            &
+            (F.col("inv.Currency_Code") ==
+             F.col("cur.`Currency Code`"))
         ),
+        how="left"
+    )
+    .join(
+        item,
+        on=(F.col("inv.itemFG") == F.col("item.`No.`")),
         how="left"
     )
 )
 
+# =========================================
 # 3) Rate logic
-# SQL: ISNULL(NULLIF(cur.[Relational Exch. Rate Amount], 0), 1)
+# =========================================
 rate = (
     F.when(
         (F.col("cur.`Relational Exch. Rate Amount`").isNull()) |
-        (F.col("cur.`Relational Exch. Rate Amount`") == F.lit(0)),
+        (F.col("cur.`Relational Exch. Rate Amount`") == 0),
         F.lit(1)
     )
     .otherwise(F.col("cur.`Relational Exch. Rate Amount`"))
     .cast("decimal(38,10)")
 )
 
+# =========================================
 # 4) Window rn
+# =========================================
 w = (
     Window
-    .partitionBy(F.col("inv.invNo"), F.col("inv.Line_No"))
-    .orderBy(F.col("inv.Document_Date").desc())
+    .partitionBy(
+        F.col("inv.invNo"),
+        F.col("inv.Line_No")
+    )
+    .orderBy(
+        F.col("inv.Document_Date").desc()
+    )
 )
 
+# =========================================
+# 5) Final dataframe
+# =========================================
 gold_full = (
     joined
     .withColumn("rn", F.row_number().over(w))
@@ -1051,27 +1077,45 @@ gold_full = (
         F.col("inv.CusNo").alias("CusNo"),
         F.col("inv.invNo").alias("invNo"),
         F.col("inv.Line_No").cast("int").alias("Line_No"),
+
         F.col("inv.Document_Date").cast("date").alias("Document_Date"),
         F.col("inv.Due_Date").cast("date").alias("Due_Date"),
         F.col("inv.Posting_Date").cast("date").alias("Posting_Date"),
         F.col("inv.Shipment_Date").cast("date").alias("Shipment_Date"),
+
         F.col("inv.Salesperson_Code").alias("Salesperson_Code"),
         F.col("inv.Order_No").alias("Order_No"),
+
         F.col("inv.Gen_Prod_Posting_Group").alias("Gen_Prod_Posting_Group"),
+
+        # Product Type from Item master
+        F.col("item.`Product Type`").alias("Product_Type"),
+
         F.col("inv.itemFG").alias("itemFG"),
         F.col("inv.Description").alias("Description"),
+
         d38("inv.Quantity").alias("Quantity"),
+
         F.col("inv.UOM").alias("UOM"),
+
         d38("inv.Unit_Cost_LCY").alias("Unit_Cost_LCY"),
         d38("inv.Unit_Price").alias("Unit_Price"),
+
         F.col("inv.Currency_Code").alias("Currency_Code"),
 
         rate.alias("relationalExchRateAmount"),
-        (d38("inv.Unit_Price") * rate).alias("amountTHB"),
-        (d38("inv.Quantity") * (d38("inv.Unit_Price") * rate)).alias("totalqtyTHB"),
+
+        (d38("inv.Unit_Price") * rate)
+            .alias("amountTHB"),
+
+        (
+            d38("inv.Quantity") *
+            (d38("inv.Unit_Price") * rate)
+        ).alias("totalqtyTHB"),
 
         F.col("inv.SalesorderNo").alias("SalesorderNo"),
         F.col("inv.linenoo").cast("int").alias("linenoo"),
+
         F.col("inv.DocDate").cast("date").alias("DocDate"),
         F.col("inv.OrderDate").cast("date").alias("OrderDate"),
         F.col("inv.DueDate").cast("date").alias("DueDate"),
@@ -1081,13 +1125,17 @@ gold_full = (
 
         F.col("rn").cast("int").alias("rn"),
 
-        # tracking passthrough
-        F.col("inv.INVH_SystemCreatedAt").alias("INVH_SystemCreatedAt"),
-        F.col("inv.INVH_SystemModifiedAt").alias("INVH_SystemModifiedAt"),
+        F.col("inv.INVH_SystemCreatedAt")
+            .alias("INVH_SystemCreatedAt"),
+
+        F.col("inv.INVH_SystemModifiedAt")
+            .alias("INVH_SystemModifiedAt"),
     )
 )
 
-# 5) FULL REPLACE: overwrite the target delta table
+# =========================================
+# 6) FULL REPLACE
+# =========================================
 (
     gold_full.write
     .format("delta")
@@ -1095,7 +1143,6 @@ gold_full = (
     .option("overwriteSchema", "true")
     .saveAsTable(TARGET)
 )
-
 
 # METADATA ********************
 
@@ -1121,7 +1168,9 @@ CL_SRC  = "Silver_BC_Lakehouse.bc.`Cust Ledger Entry`"
 
 d38 = lambda c: F.col(c).cast("decimal(38,10)")
 
-# 0) Create target table if not exists (Delta)
+# =========================================
+# 0) Create target table if not exists
+# =========================================
 spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {TARGET} (
     customer STRING,
@@ -1135,7 +1184,7 @@ CREATE TABLE IF NOT EXISTS {TARGET} (
     Salesperson_Code STRING,
     Order_No STRING,
     Gen_Prod_Posting_Group STRING,
-    Item_Category STRING,
+    Product_Type STRING,
     itemFG STRING,
     Description STRING,
     Quantity DECIMAL(38,10),
@@ -1157,8 +1206,10 @@ CREATE TABLE IF NOT EXISTS {TARGET} (
     ShipDate DATE,
 
     rn INT,
+
     INVH_SystemCreatedAt TIMESTAMP,
     INVH_SystemModifiedAt TIMESTAMP,
+
     source_system STRING,
 
     AR_Amount_THB DECIMAL(38,10)
@@ -1166,157 +1217,365 @@ CREATE TABLE IF NOT EXISTS {TARGET} (
 USING DELTA
 """)
 
-# =========================
+# =========================================
 # 1) Read sources
-# =========================
+# =========================================
 bc_src  = spark.table(BC_SRC).alias("bc")
 sap_raw = spark.table(SAP_SRC).alias("sap")
 cus     = spark.table(CUS_SRC).alias("cus")
 
-# =========================
-# 2) BC side (aligned schema)
-# =========================
+# =========================================
+# 2) BC side
+# =========================================
 bc = (
     bc_src
-    .withColumn("Posting_Date", F.to_date(F.col("Posting_Date")))
-    .withColumn("Item_Category", F.expr("right(Gen_Prod_Posting_Group, 3)"))
+    .withColumn(
+        "Posting_Date",
+        F.to_date(F.col("Posting_Date"))
+    )
     .select(
         F.col("customer"),
         F.col("CusNo"),
         F.col("invNo"),
-        F.col("Line_No").cast("int").alias("Line_No"),
-        F.to_date(F.col("Document_Date")).alias("Document_Date"),
-        F.to_date(F.col("Due_Date")).alias("Due_Date"),
-        F.to_date(F.col("Posting_Date")).alias("Posting_Date"),
-        F.to_date(F.col("Shipment_Date")).alias("Shipment_Date"),
+
+        F.col("Line_No")
+            .cast("int")
+            .alias("Line_No"),
+
+        F.to_date(F.col("Document_Date"))
+            .alias("Document_Date"),
+
+        F.to_date(F.col("Due_Date"))
+            .alias("Due_Date"),
+
+        F.to_date(F.col("Posting_Date"))
+            .alias("Posting_Date"),
+
+        F.to_date(F.col("Shipment_Date"))
+            .alias("Shipment_Date"),
+
         F.col("Salesperson_Code"),
         F.col("Order_No"),
+
         F.col("Gen_Prod_Posting_Group"),
-        F.col("Item_Category"),
+
+        # Product Type from Item master
+        F.col("Product_Type"),
+
         F.col("itemFG"),
         F.col("Description"),
+
         d38("Quantity").alias("Quantity"),
+
         F.col("UOM"),
-        d38("Unit_Cost_LCY").alias("Unit_Cost_LCY"),
-        d38("Unit_Price").alias("Unit_Price"),
+
+        d38("Unit_Cost_LCY")
+            .alias("Unit_Cost_LCY"),
+
+        d38("Unit_Price")
+            .alias("Unit_Price"),
+
         F.col("Currency_Code"),
-        d38("relationalExchRateAmount").alias("relationalExchRateAmount"),
-        d38("amountTHB").alias("amountTHB"),
-        d38("totalqtyTHB").alias("totalqtyTHB"),
 
-        F.col("SalesorderNo").alias("SalesorderNo"),
-        F.col("linenoo").cast("int").alias("linenoo"),
-        F.to_date(F.col("DocDate")).alias("DocDate"),
-        F.to_date(F.col("OrderDate")).alias("OrderDate"),
-        F.to_date(F.col("DueDate")).alias("DueDate"),
-        F.to_date(F.col("ReqDate")).alias("ReqDate"),
-        F.to_date(F.col("PmDate")).alias("PmDate"),
-        F.to_date(F.col("ShipDate")).alias("ShipDate"),
+        d38("relationalExchRateAmount")
+            .alias("relationalExchRateAmount"),
 
-        F.col("rn").cast("int").alias("rn"),
+        d38("amountTHB")
+            .alias("amountTHB"),
+
+        d38("totalqtyTHB")
+            .alias("totalqtyTHB"),
+
+        F.col("SalesorderNo")
+            .alias("SalesorderNo"),
+
+        F.col("linenoo")
+            .cast("int")
+            .alias("linenoo"),
+
+        F.to_date(F.col("DocDate"))
+            .alias("DocDate"),
+
+        F.to_date(F.col("OrderDate"))
+            .alias("OrderDate"),
+
+        F.to_date(F.col("DueDate"))
+            .alias("DueDate"),
+
+        F.to_date(F.col("ReqDate"))
+            .alias("ReqDate"),
+
+        F.to_date(F.col("PmDate"))
+            .alias("PmDate"),
+
+        F.to_date(F.col("ShipDate"))
+            .alias("ShipDate"),
+
+        F.col("rn")
+            .cast("int")
+            .alias("rn"),
+
         F.col("INVH_SystemCreatedAt"),
-        F.col("INVH_SystemModifiedAt"),
-        F.lit("BC").alias("source_system"),
 
-        # placeholder; computed after cust ledger join
-        F.lit(None).cast("decimal(38,10)").alias("AR_Amount_THB"),
+        F.col("INVH_SystemModifiedAt"),
+
+        F.lit("BC")
+            .alias("source_system"),
+
+        F.lit(None)
+            .cast("decimal(38,10)")
+            .alias("AR_Amount_THB"),
     )
 )
 
-# =========================
-# 3) SAP side (aligned schema)
-# =========================
+# =========================================
+# 3) SAP side
+# =========================================
 sap = (
     sap_raw
-    .withColumn("Posting_Date", F.to_date(F.col("posting_date")))
+    .withColumn(
+        "Posting_Date",
+        F.to_date(F.col("posting_date"))
+    )
     .join(
         cus,
-        on=(F.upper(F.col("cus.`Name`")) == F.upper(F.col("sap.customer_name"))),
+        on=(
+            F.upper(F.col("cus.`Name`")) ==
+            F.upper(F.col("sap.customer_name"))
+        ),
         how="left"
     )
     .select(
-        F.col("sap.customer_name").alias("customer"),
-        F.col("cus.`No.`").alias("CusNo"),
-        F.lit(None).cast("string").alias("invNo"),
-        F.lit(None).cast("int").alias("Line_No"),
-        F.lit(None).cast("date").alias("Document_Date"),
-        F.lit(None).cast("date").alias("Due_Date"),
-        F.col("Posting_Date").alias("Posting_Date"),
-        F.lit(None).cast("date").alias("Shipment_Date"),
-        F.lit(None).cast("string").alias("Salesperson_Code"),
-        F.lit(None).cast("string").alias("Order_No"),
-        F.lit(None).cast("string").alias("Gen_Prod_Posting_Group"),
-        F.lit(None).cast("string").alias("Item_Category"),
-        F.lit(None).cast("string").alias("itemFG"),
-        F.lit(None).cast("string").alias("Description"),
-        F.lit(None).cast("decimal(38,10)").alias("Quantity"),
-        F.lit(None).cast("string").alias("UOM"),
-        F.lit(None).cast("decimal(38,10)").alias("Unit_Cost_LCY"),
-        F.lit(None).cast("decimal(38,10)").alias("Unit_Price"),
-        F.lit(None).cast("string").alias("Currency_Code"),
-        F.lit(None).cast("decimal(38,10)").alias("relationalExchRateAmount"),
-        F.col("sap.AR_amount").cast("decimal(38,10)").alias("amountTHB"),
-        F.lit(None).cast("decimal(38,10)").alias("totalqtyTHB"),
+        F.col("sap.customer_name")
+            .alias("customer"),
 
-        F.lit(None).cast("string").alias("SalesorderNo"),
-        F.lit(None).cast("int").alias("linenoo"),
-        F.lit(None).cast("date").alias("DocDate"),
-        F.lit(None).cast("date").alias("OrderDate"),
-        F.lit(None).cast("date").alias("DueDate"),
-        F.lit(None).cast("date").alias("ReqDate"),
-        F.lit(None).cast("date").alias("PmDate"),
-        F.lit(None).cast("date").alias("ShipDate"),
+        F.col("cus.`No.`")
+            .alias("CusNo"),
 
-        F.lit(None).cast("int").alias("rn"),
-        F.lit(None).cast("timestamp").alias("INVH_SystemCreatedAt"),
-        F.lit(None).cast("timestamp").alias("INVH_SystemModifiedAt"),
-        F.lit("SAP").alias("source_system"),
+        F.lit(None)
+            .cast("string")
+            .alias("invNo"),
 
-        # placeholder; computed after cust ledger join
-        F.lit(None).cast("decimal(38,10)").alias("AR_Amount_THB"),
+        F.lit(None)
+            .cast("int")
+            .alias("Line_No"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("Document_Date"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("Due_Date"),
+
+        F.col("Posting_Date")
+            .alias("Posting_Date"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("Shipment_Date"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("Salesperson_Code"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("Order_No"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("Gen_Prod_Posting_Group"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("Product_Type"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("itemFG"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("Description"),
+
+        F.lit(None)
+            .cast("decimal(38,10)")
+            .alias("Quantity"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("UOM"),
+
+        F.lit(None)
+            .cast("decimal(38,10)")
+            .alias("Unit_Cost_LCY"),
+
+        F.lit(None)
+            .cast("decimal(38,10)")
+            .alias("Unit_Price"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("Currency_Code"),
+
+        F.lit(None)
+            .cast("decimal(38,10)")
+            .alias("relationalExchRateAmount"),
+
+        F.col("sap.AR_amount")
+            .cast("decimal(38,10)")
+            .alias("amountTHB"),
+
+        F.lit(None)
+            .cast("decimal(38,10)")
+            .alias("totalqtyTHB"),
+
+        F.lit(None)
+            .cast("string")
+            .alias("SalesorderNo"),
+
+        F.lit(None)
+            .cast("int")
+            .alias("linenoo"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("DocDate"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("OrderDate"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("DueDate"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("ReqDate"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("PmDate"),
+
+        F.lit(None)
+            .cast("date")
+            .alias("ShipDate"),
+
+        F.lit(None)
+            .cast("int")
+            .alias("rn"),
+
+        F.lit(None)
+            .cast("timestamp")
+            .alias("INVH_SystemCreatedAt"),
+
+        F.lit(None)
+            .cast("timestamp")
+            .alias("INVH_SystemModifiedAt"),
+
+        F.lit("SAP")
+            .alias("source_system"),
+
+        F.lit(None)
+            .cast("decimal(38,10)")
+            .alias("AR_Amount_THB"),
     )
 )
 
-# =========================
+# =========================================
 # 4) Union BC + SAP
-# =========================
-base_union = bc.unionByName(sap, allowMissingColumns=True).alias("u")
+# =========================================
+base_union = (
+    bc.unionByName(
+        sap,
+        allowMissingColumns=True
+    )
+    .alias("u")
+)
 
-# =========================
-# 5) Cust Ledger join + AR_Amount_THB
-# =========================
+# =========================================
+# 5) Cust Ledger + AR Amount
+# =========================================
 cl = (
     spark.table(CL_SRC)
     .select(
-        F.col("`Document No.`").alias("Document_No"),
-        F.col("`Customer No.`").alias("Customer_No"),
-        F.col("`Customer Name`").alias("Customer_Name"),
-        F.to_date(F.col("`Posting Date`")).alias("Ledger_Posting_Date"),
-        F.col("`Sales (LCY)`").cast("decimal(38,10)").alias("Sales_LCY"),
+        F.col("`Document No.`")
+            .alias("Document_No"),
+
+        F.col("`Customer No.`")
+            .alias("Customer_No"),
+
+        F.col("`Customer Name`")
+            .alias("Customer_Name"),
+
+        F.to_date(F.col("`Posting Date`"))
+            .alias("Ledger_Posting_Date"),
+
+        F.col("`Sales (LCY)`")
+            .cast("decimal(38,10)")
+            .alias("Sales_LCY"),
     )
     .alias("cl")
 )
 
 final_df = (
-    base_union.join(cl, on=(F.col("u.invNo") == F.col("cl.Document_No")), how="left")
+    base_union
+    .join(
+        cl,
+        on=(F.col("u.invNo") == F.col("cl.Document_No")),
+        how="left"
+    )
     .withColumn(
         "AR_Amount_THB",
-        F.coalesce(F.col("cl.Sales_LCY"), F.col("u.amountTHB")).cast("decimal(38,10)")
+        F.coalesce(
+            F.col("cl.Sales_LCY"),
+            F.col("u.amountTHB")
+        ).cast("decimal(38,10)")
     )
     .select(
-        "u.customer","u.CusNo","u.invNo","u.Line_No","u.Document_Date","u.Due_Date","u.Posting_Date","u.Shipment_Date",
-        "u.Salesperson_Code","u.Order_No","u.Gen_Prod_Posting_Group","u.Item_Category","u.itemFG","u.Description",
-        "u.Quantity","u.UOM","u.Unit_Cost_LCY","u.Unit_Price","u.Currency_Code","u.relationalExchRateAmount",
-        "u.amountTHB","u.totalqtyTHB","u.SalesorderNo","u.linenoo","u.DocDate","u.OrderDate","u.DueDate",
-        "u.ReqDate","u.PmDate","u.ShipDate","u.rn","u.INVH_SystemCreatedAt","u.INVH_SystemModifiedAt",
+        "u.customer",
+        "u.CusNo",
+        "u.invNo",
+        "u.Line_No",
+        "u.Document_Date",
+        "u.Due_Date",
+        "u.Posting_Date",
+        "u.Shipment_Date",
+        "u.Salesperson_Code",
+        "u.Order_No",
+        "u.Gen_Prod_Posting_Group",
+        "u.Product_Type",
+        "u.itemFG",
+        "u.Description",
+        "u.Quantity",
+        "u.UOM",
+        "u.Unit_Cost_LCY",
+        "u.Unit_Price",
+        "u.Currency_Code",
+        "u.relationalExchRateAmount",
+        "u.amountTHB",
+        "u.totalqtyTHB",
+        "u.SalesorderNo",
+        "u.linenoo",
+        "u.DocDate",
+        "u.OrderDate",
+        "u.DueDate",
+        "u.ReqDate",
+        "u.PmDate",
+        "u.ShipDate",
+        "u.rn",
+        "u.INVH_SystemCreatedAt",
+        "u.INVH_SystemModifiedAt",
         "u.source_system",
         F.col("AR_Amount_THB")
     )
 )
 
-# =========================
-# 6) FULL REPLACE: overwrite target
-# =========================
+# =========================================
+# 6) FULL REPLACE
+# =========================================
 (
     final_df.write
     .format("delta")
@@ -1324,7 +1583,6 @@ final_df = (
     .option("overwriteSchema", "true")
     .saveAsTable(TARGET)
 )
-
 
 # METADATA ********************
 

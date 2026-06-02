@@ -62,6 +62,520 @@ from pyspark.sql import functions as F, Window
 
 # MAGIC %%sql
 # MAGIC -- =====================================================================
+# MAGIC -- Notebook: nb_gold_item_master  (REDESIGN — Policy-Driven 2026-06-01)
+# MAGIC -- Layer:    Bronze → Gold MRP
+# MAGIC -- Output:   Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC --           Gold_Inventory_Lakehouse.mrp.gold_Item_Master_DQ_Issues
+# MAGIC -- =====================================================================
+# MAGIC -- 🔧 REDESIGN (2026-06-01): Archetype = POLICY-DRIVEN, ไม่มี category hardcode
+# MAGIC --
+# MAGIC --   หลักการ (ตามที่ Phloy กำหนด):
+# MAGIC --     "item category and policy ต้องมาจากที่เดียวกัน ความหมายเดียวกัน"
+# MAGIC --     archetype สะท้อนการ์ด BC ตรงๆ — มาจาก Replenishment System + Reordering
+# MAGIC --     Policy เท่านั้น. category/metal เป็นแค่คำอธิบายว่า "ของคืออะไร" ใช้สำหรับ
+# MAGIC --     UOM / cost / metal weight downstream — ไม่ใช่ตัวตัดสิน routing.
+# MAGIC --
+# MAGIC --   เลิกใช้ category list ทั้งหมดใน archetype CASE (เลิก enumerate
+# MAGIC --   'DIAMOND NAT','DIAMONDS LAB','GEMSTONES','PACKAGING','STATIONARY',
+# MAGIC --   'PLATING SOLUTION' ฯลฯ ซึ่งหลายตัวไม่มีอยู่จริงใน BC ด้วยซ้ำ)
+# MAGIC --
+# MAGIC --   Mapping (policy ล้วน):
+# MAGIC --     Replenishment = Prod. Order / Assembly        → MPS  (ผลิตเอง, BOM explosion)
+# MAGIC --     Replenishment = Purchase + Lot-for-Lot        → L4L
+# MAGIC --     Replenishment = Purchase + Fixed Reorder Qty. → ROP
+# MAGIC --     Replenishment = Purchase + Maximum Qty.       → ROP
+# MAGIC --     Replenishment = Purchase + Order              → ORDER
+# MAGIC --     Replenishment = Purchase + (no policy)        → SKIP  (BC: ไม่ plan)
+# MAGIC --     Replenishment = (ว่าง)                        → UNKNOWN (การ์ดไม่ครบ)
+# MAGIC --
+# MAGIC --   ⚠️ การเปลี่ยนพฤติกรรมที่ต้องรู้ (verify ก่อน deploy):
+# MAGIC --     1) MST ~8,352 ตัว มี Prod.Order → ตอนนี้กลายเป็น MPS (เดิม SKIP).
+# MAGIC --        ถ้า master piece ไม่ควร plan → ต้องแก้ที่การ์ด BC (Production Blocked
+# MAGIC --        / Replenishment ว่าง) ไม่ใช่ hardcode ใน notebook.
+# MAGIC --     2) Replenishment ว่าง (~106 ตัว: DIAMONDS 88, STONES 14, PEARLS 4)
+# MAGIC --        → UNKNOWN. canary DI-RD-000362 อาจอยู่กลุ่มนี้ → ต้อง set
+# MAGIC --        Replenishment System ใน BC ก่อน. (toggle assume-Purchase อยู่ใน CELL 3)
+# MAGIC --     3) ALLOY archetype ถูกยกเลิก — bullion (GOLD/SILVER) → L4L/ROP ตาม policy.
+# MAGIC --        ⚠️ ถ้า downstream มี "ALLOY plan generation" ที่ key จาก archetype='ALLOY'
+# MAGIC --        ต้องเปลี่ยนไป key จาก metal_category แทน ก่อน deploy.
+# MAGIC -- =====================================================================
+# MAGIC -- HOW TO USE:
+# MAGIC --   - แต่ละ "block" ที่คั่นด้วย ----- = 1 cell ใน Fabric notebook
+# MAGIC --   - หรือ paste ทั้งไฟล์ใน cell เดียวก็ได้
+# MAGIC --   - Run ตามลำดับ
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 1: Setup schema ==============
+# MAGIC 
+# MAGIC CREATE SCHEMA IF NOT EXISTS Gold_Inventory_Lakehouse.mrp;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 2: Spark settings ==============
+# MAGIC -- Disable optimizeWrite (Ennovie known issue)
+# MAGIC 
+# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 3: Build gold_Item_Master  ⭐ POLICY-DRIVEN ==============
+# MAGIC 
+# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC USING DELTA
+# MAGIC AS
+# MAGIC WITH parsed AS (
+# MAGIC     SELECT
+# MAGIC         -- === Group 0: Identity ===
+# MAGIC         `No.`                       AS item_no,
+# MAGIC         Description                 AS description,
+# MAGIC         `Item Category Code`        AS item_category,
+# MAGIC         `Base Unit of Measure`      AS base_uom,
+# MAGIC         `Replenishment System`      AS replenishment_system,
+# MAGIC         `Unit Cost`                 AS unit_cost,
+# MAGIC         `Last DateTime Modified`    AS last_modified,
+# MAGIC         CAST(Blocked AS BOOLEAN)    AS is_blocked,
+# MAGIC         
+# MAGIC         -- === Group 1: Archetype Routing ===
+# MAGIC         `Reordering Policy`         AS reordering_policy,
+# MAGIC         `Manufacturing Policy`      AS mfg_policy,
+# MAGIC         COALESCE(NULLIF(Reserve, ''), 'Never') AS reserve_policy,
+# MAGIC         
+# MAGIC         -- === Group 2: Exception Control ===
+# MAGIC         CASE
+# MAGIC             WHEN `Dampener Period` RLIKE '^[0-9]+D$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Dampener Period`, '^([0-9]+)D$', 1) AS INT)
+# MAGIC             WHEN `Dampener Period` RLIKE '^[0-9]+W$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Dampener Period`, '^([0-9]+)W$', 1) AS INT) * 7
+# MAGIC             WHEN `Dampener Period` RLIKE '^[0-9]+M$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Dampener Period`, '^([0-9]+)M$', 1) AS INT) * 30
+# MAGIC             WHEN `Dampener Period` RLIKE '^[0-9]+Y$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Dampener Period`, '^([0-9]+)Y$', 1) AS INT) * 365
+# MAGIC             ELSE 0
+# MAGIC         END                         AS dampener_period_days,
+# MAGIC         COALESCE(`Dampener Quantity`, 0)    AS dampener_qty,
+# MAGIC         CAST(Critical AS BOOLEAN)           AS critical_flag,
+# MAGIC         CASE
+# MAGIC             WHEN `Item Tracking Code` LIKE '%LOT%' AND `Item Tracking Code` LIKE '%SN%' THEN 'Both'
+# MAGIC             WHEN `Item Tracking Code` LIKE '%LOT%' THEN 'Lot'
+# MAGIC             WHEN `Item Tracking Code` LIKE '%SN%'  THEN 'Serial'
+# MAGIC             ELSE 'None'
+# MAGIC         END                         AS tracking_policy,
+# MAGIC         
+# MAGIC         -- === Group 3: Netting ===
+# MAGIC         COALESCE(`Safety Stock Quantity`, 0) AS safety_stock_qty,
+# MAGIC         CASE
+# MAGIC             WHEN `Safety Lead Time` RLIKE '^[0-9]+D$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Safety Lead Time`, '^([0-9]+)D$', 1) AS INT)
+# MAGIC             WHEN `Safety Lead Time` RLIKE '^[0-9]+W$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Safety Lead Time`, '^([0-9]+)W$', 1) AS INT) * 7
+# MAGIC             WHEN `Safety Lead Time` RLIKE '^[0-9]+M$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Safety Lead Time`, '^([0-9]+)M$', 1) AS INT) * 30
+# MAGIC             ELSE 0
+# MAGIC         END                         AS safety_lead_days_static,
+# MAGIC         COALESCE(CAST(`Include Inventory` AS BOOLEAN), TRUE) AS include_inventory,
+# MAGIC         
+# MAGIC         -- === Group 4: Lot Sizing ===
+# MAGIC         COALESCE(`Reorder Point`, 0)      AS rop_qty,
+# MAGIC         COALESCE(`Reorder Quantity`, 0)   AS roq_qty,
+# MAGIC         COALESCE(`Maximum Inventory`, 0)  AS max_inv_qty,
+# MAGIC         COALESCE(`Overflow Level`, 0)     AS overflow_qty,
+# MAGIC         -- 🔧 ลบ category hardcode (เดิม: PEARL→14 ELSE 7 — typo 'PEARL' ไม่เคย match
+# MAGIC         --    'PEARLS' อยู่แล้ว pearls จึงได้ 7 มาตลอด). ใช้ค่า default ระบบตัวเดียว.
+# MAGIC         --    ถ้า pearls ต้องการ 14-day accumulation → set Lot Accumulation Period
+# MAGIC         --    ที่การ์ด BC.
+# MAGIC         COALESCE(
+# MAGIC             CASE
+# MAGIC                 WHEN `Lot Accumulation Period` RLIKE '^[0-9]+D$' 
+# MAGIC                     THEN CAST(REGEXP_EXTRACT(`Lot Accumulation Period`, '^([0-9]+)D$', 1) AS INT)
+# MAGIC                 WHEN `Lot Accumulation Period` RLIKE '^[0-9]+W$' 
+# MAGIC                     THEN CAST(REGEXP_EXTRACT(`Lot Accumulation Period`, '^([0-9]+)W$', 1) AS INT) * 7
+# MAGIC                 WHEN `Lot Accumulation Period` RLIKE '^[0-9]+M$' 
+# MAGIC                     THEN CAST(REGEXP_EXTRACT(`Lot Accumulation Period`, '^([0-9]+)M$', 1) AS INT) * 30
+# MAGIC                 ELSE NULL
+# MAGIC             END,
+# MAGIC             7
+# MAGIC         )                           AS lot_accum_days,
+# MAGIC         CASE
+# MAGIC             WHEN `Rescheduling Period` RLIKE '^[0-9]+D$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Rescheduling Period`, '^([0-9]+)D$', 1) AS INT)
+# MAGIC             WHEN `Rescheduling Period` RLIKE '^[0-9]+W$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Rescheduling Period`, '^([0-9]+)W$', 1) AS INT) * 7
+# MAGIC             ELSE 0
+# MAGIC         END                         AS reschedule_days,
+# MAGIC         
+# MAGIC         -- === Group 5: Order Shape ===
+# MAGIC         COALESCE(`Minimum Order Quantity`, 0) AS min_order_qty,
+# MAGIC         CASE 
+# MAGIC             WHEN COALESCE(`Maximum Order Quantity`, 0) = 0 THEN 999999
+# MAGIC             ELSE `Maximum Order Quantity`
+# MAGIC         END                                   AS max_order_qty,
+# MAGIC         CASE 
+# MAGIC             WHEN COALESCE(`Order Multiple`, 0) = 0 THEN 1
+# MAGIC             ELSE `Order Multiple`
+# MAGIC         END                                   AS order_multiple,
+# MAGIC         COALESCE(`Scrap %`, 0)                AS scrap_pct,
+# MAGIC         
+# MAGIC         -- === Group 6: Sourcing — static ===
+# MAGIC         NULLIF(`Vendor No.`, '')              AS vendor_no,
+# MAGIC         COALESCE(NULLIF(`Lead Time Calculation`, ''), '0D') AS lead_time_calc_raw,
+# MAGIC         CASE
+# MAGIC             WHEN `Lead Time Calculation` RLIKE '^[0-9]+D$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Lead Time Calculation`, '^([0-9]+)D$', 1) AS INT)
+# MAGIC             WHEN `Lead Time Calculation` RLIKE '^[0-9]+W$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Lead Time Calculation`, '^([0-9]+)W$', 1) AS INT) * 7
+# MAGIC             WHEN `Lead Time Calculation` RLIKE '^[0-9]+M$' 
+# MAGIC                 THEN CAST(REGEXP_EXTRACT(`Lead Time Calculation`, '^([0-9]+)M$', 1) AS INT) * 30
+# MAGIC             ELSE 0
+# MAGIC         END                                   AS base_lead_days_static,
+# MAGIC         COALESCE(NULLIF(`Purch. Unit of Measure`, ''), `Base Unit of Measure`) AS purch_uom,
+# MAGIC         
+# MAGIC         -- === Ennovie-specific extras (descriptive — ใช้สำหรับ UOM/cost/metal weight) ===
+# MAGIC         Alloy                       AS alloy,
+# MAGIC         `Alloy Type`                AS alloy_type,
+# MAGIC         `Metal Category Code`       AS metal_category,
+# MAGIC         `Material Type`             AS material_type,
+# MAGIC         `Approval Status`           AS approval_status,
+# MAGIC         `Production Blocked`        AS production_blocked,
+# MAGIC         CAST(`Sales Blocked` AS BOOLEAN)        AS sales_blocked,
+# MAGIC         CAST(`Purchasing Blocked` AS BOOLEAN)   AS purchasing_blocked
+# MAGIC         
+# MAGIC     FROM Silver_BC_Lakehouse.bc.`Item`
+# MAGIC     WHERE `BC Company` = 'Ennovie'
+# MAGIC ),
+# MAGIC 
+# MAGIC with_archetype AS (
+# MAGIC     SELECT
+# MAGIC         p.*,
+# MAGIC         
+# MAGIC         -- === Group 7: Computed helpers ===
+# MAGIC         p.base_lead_days_static + p.safety_lead_days_static AS effective_lead_days,
+# MAGIC         
+# MAGIC         -- =====================================================================
+# MAGIC         -- Archetype derivation — POLICY-DRIVEN (ไม่มี category)
+# MAGIC         --
+# MAGIC         -- อ่านการ์ด BC ตรงๆ: Replenishment System + Reordering Policy.
+# MAGIC         -- ไม่มี item_category อยู่ใน logic นี้แม้แต่ branch เดียว.
+# MAGIC         -- =====================================================================
+# MAGIC         CASE
+# MAGIC             -- ผลิตในบ้าน → MPS (component demand ผ่าน BOM explosion ใน V6)
+# MAGIC             -- (รวม blank policy ด้วย เพราะ Prod.Order = แหล่ง supply คือ production)
+# MAGIC             WHEN COALESCE(TRIM(p.replenishment_system), '') IN ('Prod. Order', 'Assembly')
+# MAGIC                 THEN 'MPS'
+# MAGIC 
+# MAGIC             -- ซื้อ → route ตาม Reordering Policy ของ item เอง
+# MAGIC             WHEN COALESCE(TRIM(p.replenishment_system), '') = 'Purchase' THEN
+# MAGIC                 CASE COALESCE(TRIM(p.reordering_policy), '')
+# MAGIC                     WHEN 'Lot-for-Lot'        THEN 'L4L'
+# MAGIC                     WHEN 'Fixed Reorder Qty.' THEN 'ROP'
+# MAGIC                     WHEN 'Maximum Qty.'       THEN 'ROP'
+# MAGIC                     WHEN 'Order'              THEN 'ORDER'
+# MAGIC                     -- BC: Reordering Policy ว่าง = ไม่ถูก plan โดย MRP (manual)
+# MAGIC                     WHEN ''                   THEN 'SKIP'
+# MAGIC                     -- policy แปลกที่ระบบไม่รู้จัก → ให้ user ตรวจ
+# MAGIC                     ELSE 'UNKNOWN'
+# MAGIC                 END
+# MAGIC 
+# MAGIC             -- Replenishment System ว่าง = การ์ดไม่ครบ → ตัดสิน plan ไม่ได้
+# MAGIC             -- ⬇️ TOGGLE: ถ้าต้องการ assume Purchase เมื่อ Replenishment ว่าง
+# MAGIC             --    (กระทบ canary DI-RD-000362 / diamonds 88 ตัว) ให้ replace
+# MAGIC             --    branch ELSE ข้างล่างด้วย logic เดียวกับ 'Purchase' ข้างบน
+# MAGIC             ELSE 'UNKNOWN'
+# MAGIC         END AS archetype
+# MAGIC     FROM parsed p
+# MAGIC ),
+# MAGIC 
+# MAGIC with_leadtime AS (
+# MAGIC     SELECT
+# MAGIC         i.*,
+# MAGIC         -- vw_Vendor_Item_LeadTime not available — placeholder NULLs
+# MAGIC         CAST(NULL AS INT)       AS lt_sample_size,
+# MAGIC         CAST(NULL AS DECIMAL(10,2)) AS lt_avg_days,
+# MAGIC         CAST(NULL AS DECIMAL(10,2)) AS lt_p95_days,
+# MAGIC         CAST(NULL AS DECIMAL(10,2)) AS lt_stddev_days,
+# MAGIC         CAST(NULL AS DOUBLE)    AS lt_recommended_normal_days,
+# MAGIC         CAST(NULL AS DOUBLE)    AS lt_recommended_safety_days,
+# MAGIC         CAST(NULL AS DOUBLE)    AS lt_recommended_total_days
+# MAGIC     FROM with_archetype i
+# MAGIC     -- Original join (re-enable when view is available):
+# MAGIC     -- LEFT JOIN Silver_BC_Lakehouse.bc.vw_Vendor_Item_LeadTime lt
+# MAGIC     --        ON i.item_no = lt.ItemNo
+# MAGIC     --       AND i.vendor_no = lt.VendorNo
+# MAGIC     --       AND lt.`BC Company` = 'Ennovie'
+# MAGIC ),
+# MAGIC 
+# MAGIC with_dq AS (
+# MAGIC     SELECT
+# MAGIC         w.*,
+# MAGIC         FILTER(ARRAY(
+# MAGIC             -- DQ-1: Reserve policy must be 'Never' (Management doc rule)
+# MAGIC             CASE WHEN reserve_policy <> 'Never' AND is_blocked = FALSE
+# MAGIC                 THEN STRUCT(
+# MAGIC                     'WRONG_RESERVE_POLICY' AS issue_code,
+# MAGIC                     'HIGH' AS severity,
+# MAGIC                     CONCAT('Reserve = ''', reserve_policy, ''' but Ennovie policy is ''Never''') AS message
+# MAGIC                 )
+# MAGIC             END,
+# MAGIC             
+# MAGIC             -- DQ-2: UNKNOWN archetype — การ์ดไม่ครบ user ต้องเติมใน BC
+# MAGIC             CASE WHEN archetype = 'UNKNOWN' AND is_blocked = FALSE
+# MAGIC                 THEN STRUCT(
+# MAGIC                     'INCOMPLETE_ITEM_DATA' AS issue_code,
+# MAGIC                     'HIGH' AS severity,
+# MAGIC                     CONCAT(
+# MAGIC                         'Cannot derive archetype. ',
+# MAGIC                         'Replenishment System=''', COALESCE(replenishment_system, 'MISSING'), ''', ',
+# MAGIC                         'Reordering Policy=''', COALESCE(reordering_policy, 'MISSING'), '''. ',
+# MAGIC                         CASE
+# MAGIC                             WHEN COALESCE(TRIM(replenishment_system), '') = ''
+# MAGIC                                 THEN 'ACTION: Set Replenishment System (Purchase หรือ Prod. Order) ที่การ์ด BC.'
+# MAGIC                             ELSE 'ACTION: Set a valid Reordering Policy (Lot-for-Lot / Fixed Reorder Qty. / Maximum Qty. / Order).'
+# MAGIC                         END
+# MAGIC                     ) AS message
+# MAGIC                 )
+# MAGIC             END,
+# MAGIC             
+# MAGIC             -- DQ-3: ROP needs both rop_qty and roq_qty
+# MAGIC             CASE WHEN archetype = 'ROP' 
+# MAGIC                  AND (rop_qty = 0 OR roq_qty = 0) 
+# MAGIC                  AND is_blocked = FALSE
+# MAGIC                 THEN STRUCT(
+# MAGIC                     'MISSING_ROP_OR_ROQ' AS issue_code,
+# MAGIC                     'MEDIUM' AS severity,
+# MAGIC                     CONCAT('rop_qty=', CAST(rop_qty AS STRING), ', roq_qty=', CAST(roq_qty AS STRING)) AS message
+# MAGIC                 )
+# MAGIC             END,
+# MAGIC             
+# MAGIC             -- DQ-4: Purchase archetype but no vendor  (ลบ 'ALLOY' — archetype นี้ไม่มีแล้ว)
+# MAGIC             CASE WHEN archetype IN ('L4L', 'ROP', 'ORDER')
+# MAGIC                  AND vendor_no IS NULL
+# MAGIC                  AND is_blocked = FALSE
+# MAGIC                 THEN STRUCT(
+# MAGIC                     'MISSING_VENDOR' AS issue_code,
+# MAGIC                     'MEDIUM' AS severity,
+# MAGIC                     'Purchase archetype but no vendor on Item card' AS message
+# MAGIC                 )
+# MAGIC             END,
+# MAGIC             
+# MAGIC             -- DQ-5: Purchase archetype but no lead time
+# MAGIC             CASE WHEN archetype IN ('L4L', 'ROP', 'ORDER')
+# MAGIC                  AND base_lead_days_static = 0
+# MAGIC                  AND is_blocked = FALSE
+# MAGIC                 THEN STRUCT(
+# MAGIC                     'MISSING_LEAD_TIME' AS issue_code,
+# MAGIC                     'MEDIUM' AS severity,
+# MAGIC                     'Purchase archetype but Lead Time Calculation is 0 or empty' AS message
+# MAGIC                 )
+# MAGIC             END,
+# MAGIC             
+# MAGIC             -- DQ-6: Static vs dynamic lead time mismatch (>50% diff)
+# MAGIC             CASE WHEN lt_avg_days IS NOT NULL
+# MAGIC                  AND base_lead_days_static > 0
+# MAGIC                  AND ABS(lt_avg_days - base_lead_days_static) / base_lead_days_static > 0.5
+# MAGIC                 THEN STRUCT(
+# MAGIC                     'LEAD_TIME_DRIFT' AS issue_code,
+# MAGIC                     'LOW' AS severity,
+# MAGIC                     CONCAT(
+# MAGIC                         'Static=', CAST(base_lead_days_static AS STRING), 'd, ',
+# MAGIC                         'vendor avg=', CAST(lt_avg_days AS STRING), 'd. Consider updating BC.'
+# MAGIC                     ) AS message
+# MAGIC                 )
+# MAGIC             END,
+# MAGIC 
+# MAGIC             -- DQ-7: Purchase item ไม่มี Reordering Policy → SKIP (ไม่ถูก plan)
+# MAGIC             -- LOW severity: เป็น info ให้ planner review ว่าตั้งใจไม่ plan จริงไหม
+# MAGIC             CASE WHEN archetype = 'SKIP'
+# MAGIC                  AND COALESCE(TRIM(reordering_policy), '') = ''
+# MAGIC                  AND is_blocked = FALSE
+# MAGIC                 THEN STRUCT(
+# MAGIC                     'NOT_PLANNED_NO_POLICY' AS issue_code,
+# MAGIC                     'LOW' AS severity,
+# MAGIC                     'Purchase item has no Reordering Policy → excluded from MRP (SKIP). Set a policy in BC if it should be planned.' AS message
+# MAGIC                 )
+# MAGIC             END
+# MAGIC         ), x -> x IS NOT NULL) AS dq_issues
+# MAGIC     FROM with_leadtime w
+# MAGIC )
+# MAGIC 
+# MAGIC SELECT
+# MAGIC     *,
+# MAGIC     SIZE(dq_issues) > 0    AS has_dq_issue,
+# MAGIC     SIZE(dq_issues)        AS dq_issue_count,
+# MAGIC     CURRENT_TIMESTAMP()    AS silver_loaded_at
+# MAGIC FROM with_dq;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 4: Build DQ Issues table (flattened) ==============
+# MAGIC 
+# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_Item_Master_DQ_Issues
+# MAGIC USING DELTA
+# MAGIC AS
+# MAGIC SELECT
+# MAGIC     item_no,
+# MAGIC     description,
+# MAGIC     item_category,
+# MAGIC     archetype,
+# MAGIC     reserve_policy,
+# MAGIC     vendor_no,
+# MAGIC     issue.issue_code   AS issue_code,
+# MAGIC     issue.severity     AS severity,
+# MAGIC     issue.message      AS message,
+# MAGIC     silver_loaded_at   AS detected_at
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC LATERAL VIEW EXPLODE(dq_issues) AS issue
+# MAGIC WHERE has_dq_issue = TRUE;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 5: Validation — row counts ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     'Bronze Item rows'              AS metric,
+# MAGIC     COUNT(*)                        AS value
+# MAGIC FROM Silver_BC_Lakehouse.bc.`Item`
+# MAGIC WHERE `BC Company` = 'Ennovie'
+# MAGIC 
+# MAGIC UNION ALL
+# MAGIC SELECT 
+# MAGIC     'Gold Item Master rows',
+# MAGIC     COUNT(*)
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC 
+# MAGIC UNION ALL
+# MAGIC SELECT 
+# MAGIC     'Active items (not blocked)',
+# MAGIC     COUNT(*)
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC WHERE is_blocked = FALSE
+# MAGIC 
+# MAGIC UNION ALL
+# MAGIC SELECT 
+# MAGIC     'Items with DQ issues',
+# MAGIC     COUNT(*)
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC WHERE has_dq_issue = TRUE
+# MAGIC 
+# MAGIC UNION ALL
+# MAGIC SELECT 
+# MAGIC     'Total DQ issue records',
+# MAGIC     COUNT(*)
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master_DQ_Issues
+# MAGIC 
+# MAGIC UNION ALL
+# MAGIC SELECT 
+# MAGIC     'Duplicate item_no',
+# MAGIC     COUNT(*) - COUNT(DISTINCT item_no)
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 6: VERIFICATION — category × archetype ==============
+# MAGIC -- เทียบกับ data จริง (CSV) ว่า policy-driven ให้ผลตามที่วิเคราะห์
+# MAGIC -- ที่ต้องจับตา:
+# MAGIC --   MST     → mps ทั้งก้อน (~8,352)  ← เดิม SKIP
+# MAGIC --   DIAMONDS→ unknown ~88            ← repl ว่าง (รวม canary?)
+# MAGIC --   PLATING ROUTING → skip ~214      ← Purchase ไม่มี policy
+# MAGIC 
+# MAGIC SELECT
+# MAGIC     item_category,
+# MAGIC     COUNT(*)                                         AS total,
+# MAGIC     COUNT(CASE WHEN is_blocked = FALSE THEN 1 END)   AS active,
+# MAGIC     COUNT(CASE WHEN archetype = 'MPS'     THEN 1 END) AS mps,
+# MAGIC     COUNT(CASE WHEN archetype = 'L4L'     THEN 1 END) AS l4l,
+# MAGIC     COUNT(CASE WHEN archetype = 'ROP'     THEN 1 END) AS rop,
+# MAGIC     COUNT(CASE WHEN archetype = 'ORDER'   THEN 1 END) AS ord,
+# MAGIC     COUNT(CASE WHEN archetype = 'SKIP'    THEN 1 END) AS skip,
+# MAGIC     COUNT(CASE WHEN archetype = 'UNKNOWN' THEN 1 END) AS unknown
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC GROUP BY item_category
+# MAGIC ORDER BY total DESC;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 6b: archetype totals ==============
+# MAGIC 
+# MAGIC SELECT
+# MAGIC     archetype,
+# MAGIC     COUNT(*)                                       AS total_items,
+# MAGIC     COUNT(CASE WHEN is_blocked = FALSE THEN 1 END) AS active_items,
+# MAGIC     COUNT(CASE WHEN has_dq_issue = TRUE THEN 1 END) AS with_dq_issues
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC GROUP BY archetype
+# MAGIC ORDER BY total_items DESC;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 7: Validation — DQ issues by code ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     issue_code,
+# MAGIC     severity,
+# MAGIC     COUNT(*) AS occurrences
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master_DQ_Issues
+# MAGIC GROUP BY issue_code, severity
+# MAGIC ORDER BY 
+# MAGIC     CASE severity WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
+# MAGIC     occurrences DESC;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 8: Sample 5 items per archetype ==============
+# MAGIC 
+# MAGIC WITH ranked AS (
+# MAGIC     SELECT 
+# MAGIC         item_no, description, item_category, archetype,
+# MAGIC         replenishment_system, reordering_policy, vendor_no, rop_qty, roq_qty,
+# MAGIC         base_lead_days_static,
+# MAGIC         ROW_NUMBER() OVER (PARTITION BY archetype ORDER BY item_no) AS rn
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC     WHERE is_blocked = FALSE
+# MAGIC )
+# MAGIC SELECT *
+# MAGIC FROM ranked
+# MAGIC WHERE rn <= 5
+# MAGIC ORDER BY archetype, item_no;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 9: Action list — items ที่ user ต้องไปแก้ใน BC ==============
+# MAGIC -- group ตาม Replenishment + Policy (สาเหตุจริง) ไม่ใช่ category
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     replenishment_system,
+# MAGIC     reordering_policy,
+# MAGIC     item_category,
+# MAGIC     COUNT(*) AS items_affected,
+# MAGIC     SLICE(COLLECT_LIST(item_no), 1, 5) AS sample_items_first_5
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC WHERE archetype = 'UNKNOWN' 
+# MAGIC   AND is_blocked = FALSE
+# MAGIC GROUP BY replenishment_system, reordering_policy, item_category
+# MAGIC ORDER BY items_affected DESC;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 10: Items ที่ user ต้องแก้ใน BC — full list ==============
+# MAGIC -- Export ส่งทีม Procurement / Planner
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     item_no,
+# MAGIC     description,
+# MAGIC     item_category,
+# MAGIC     replenishment_system,
+# MAGIC     reordering_policy,
+# MAGIC     mfg_policy,
+# MAGIC     CASE 
+# MAGIC         WHEN COALESCE(TRIM(replenishment_system), '') = '' 
+# MAGIC             THEN 'Set Replenishment System (Purchase or Prod. Order)'
+# MAGIC         ELSE 'Set a valid Reordering Policy (Lot-for-Lot / Fixed Reorder Qty. / Maximum Qty. / Order)'
+# MAGIC     END AS suggested_action
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC WHERE archetype = 'UNKNOWN' 
+# MAGIC   AND is_blocked = FALSE
+# MAGIC ORDER BY replenishment_system, reordering_policy, item_no;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC -- =====================================================================
 # MAGIC -- Notebook: nb_gold_item_master  (PATCHED — Bug Fix 2026-04-27)
 # MAGIC -- Layer:    Bronze → Gold MRP
 # MAGIC -- Output:   Gold_Inventory_Lakehouse.mrp.gold_Item_Master
@@ -597,7 +1111,9 @@ from pyspark.sql import functions as F, Window
 
 # META {
 # META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
+# META   "language_group": "synapse_pyspark",
+# META   "frozen": true,
+# META   "editable": false
 # META }
 
 # MARKDOWN ********************
@@ -2110,7 +2626,7 @@ from pyspark.sql import functions as F, Window
 
 # MARKDOWN ********************
 
-# # nb_gold_planned_orders_alloy  (Phase 3 — Archetype 2 of 5)
+# # DROP nb_gold_planned_orders_alloy  (Phase 3 — Archetype 2 of 5)
 
 # CELL ********************
 
@@ -2432,7 +2948,9 @@ from pyspark.sql import functions as F, Window
 
 # META {
 # META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
+# META   "language_group": "synapse_pyspark",
+# META   "frozen": true,
+# META   "editable": false
 # META }
 
 # MARKDOWN ********************
@@ -4453,13 +4971,20 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 
 # MARKDOWN ********************
 
-# # nb_gold_planned_orders_unified  (Phase 4 — Bug Fix #2: OVERDUE)
+# # nb_gold_planned_orders_unified_v7  (Phase 4 — Bug Fix #2: OVERDUE)
 
 # CELL ********************
 
 # MAGIC %%sql
 # MAGIC -- =====================================================================
-# MAGIC -- STANDALONE: Unified UNION Refresh — v6 (datetime rebase fix)
+# MAGIC -- STANDALONE: Unified UNION Refresh — v7 (ALLOY retired 2026-06-02)
+# MAGIC --
+# MAGIC -- 🔧 v7 CHANGE: ลบ alloy_plans ออกจาก UNION.
+# MAGIC --   เหตุผล: gold_planned_orders_alloy ตอนนี้ผลิต 0 แถวที่มีประโยชน์
+# MAGIC --   (CASTING_PRO=0 ยืนยันแล้ว, ALLOY_PURCHASE=25 = bullion ที่ตอนนี้
+# MAGIC --   route เป็น L4L/ROP ตาม policy การ์ดอยู่แล้ว → ไม่ซ้ำ ไม่หาย).
+# MAGIC --   ALLOY archetype ถูกยกเลิกใน gold_Item_Master (policy-driven redesign).
+# MAGIC --   → เอา alloy_plans CTE + UNION line ออก. ไม่ต้องรัน nb_gold_planned_orders_alloy อีก.
 # MAGIC -- 
 # MAGIC -- Schema confirmed via DESCRIBE TABLE on all 6 archetype tables 2026-04-29
 # MAGIC -- v6: added datetime rebase mode SETs (CORRECTED) to handle ancient dates
@@ -4506,29 +5031,7 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_mps
 # MAGIC ),
 # MAGIC 
-# MAGIC -- ============== ALLOY ==============
-# MAGIC -- ALLOY uses: triggering_so_no, item_description, demand_qty, need_by_date, suggested_start_date
-# MAGIC alloy_plans AS (
-# MAGIC     SELECT 
-# MAGIC         plan_id,
-# MAGIC         archetype,
-# MAGIC         triggering_so_no AS source_so_no,
-# MAGIC         customer_tier,
-# MAGIC         priority_weight,
-# MAGIC         is_dnd,
-# MAGIC         item_no,
-# MAGIC         item_description AS description,
-# MAGIC         item_category,
-# MAGIC         CAST(demand_qty AS DECIMAL(38,20))           AS demand_qty,
-# MAGIC         CAST(onhand_available_qty AS DECIMAL(38,20)) AS onhand_available_qty,
-# MAGIC         CAST(shortage_qty AS DECIMAL(38,19))         AS shortage_qty,
-# MAGIC         CAST(planned_qty AS DECIMAL(38,20))          AS planned_qty,
-# MAGIC         need_by_date,
-# MAGIC         suggested_start_date AS suggested_order_date,
-# MAGIC         plan_status,
-# MAGIC         exception_reason
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_alloy
-# MAGIC ),
+# MAGIC -- ============== ALLOY: RETIRED v7 (see header) ==============
 # MAGIC 
 # MAGIC -- ============== L4L ==============
 # MAGIC -- L4L uses: triggering_so_no, item_description, demand_qty, earliest_ship_date, suggested_order_date
@@ -4629,7 +5132,6 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MAGIC 
 # MAGIC all_plans AS (
 # MAGIC     SELECT * FROM mps_plans
-# MAGIC     UNION ALL SELECT * FROM alloy_plans
 # MAGIC     UNION ALL SELECT * FROM l4l_plans
 # MAGIC     UNION ALL SELECT * FROM rop_plans
 # MAGIC     UNION ALL SELECT * FROM order_plans
@@ -4737,1250 +5239,7 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 
 # MARKDOWN ********************
 
-# # DQ Report Export Queries v2 — Phase 4 Step 3
-
-# CELL ********************
-
-# MAGIC %%sql
-# MAGIC -- =====================================================================
-# MAGIC -- DQ Report Export Queries v3 — Phase 4 Step 3
-# MAGIC -- 4 Sheets (Master Data sheet dropped — to be requested separately from MD team)
-# MAGIC -- 
-# MAGIC -- Workflow:
-# MAGIC --   1. Run each query in Fabric Spark SQL notebook
-# MAGIC --   2. Export each result → CSV with names:
-# MAGIC --        sheet1_critical_late.csv
-# MAGIC --        sheet2_procurement.csv
-# MAGIC --        sheet3_engineering.csv
-# MAGIC --        sheet4_summary.csv
-# MAGIC --   3. Send all 4 CSVs to Claude → will generate DQ_Report.xlsx
-# MAGIC -- 
-# MAGIC -- Audience for each sheet:
-# MAGIC --   Sheet 1 (Critical Late):     Production Manager
-# MAGIC --   Sheet 2 (Procurement):       Procurement Lead
-# MAGIC --   Sheet 3 (Engineering):       Engineering Manager
-# MAGIC --   Sheet 4 (Summary):           Leadership / DPA
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== Common settings (run before each query) ==============
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = CORRECTED;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = CORRECTED;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = CORRECTED;
-# MAGIC 
-# MAGIC 
-# MAGIC -- =====================================================================
-# MAGIC -- SHEET 1: Critical Late Items  (For Production Manager)
-# MAGIC -- Expected rows: ~1,761 (525 + 986 + 29 + 221)
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     plan_status               AS `Plan Status`,
-# MAGIC     archetype                 AS `Archetype`,
-# MAGIC     customer_tier             AS `Customer Tier`,
-# MAGIC     is_dnd                    AS `DND`,
-# MAGIC     source_so_no              AS `Source SO`,
-# MAGIC     item_no                   AS `Item No`,
-# MAGIC     description               AS `Description`,
-# MAGIC     item_category             AS `Category`,
-# MAGIC     demand_qty                AS `Demand Qty`,
-# MAGIC     onhand_available_qty      AS `On Hand`,
-# MAGIC     shortage_qty              AS `Shortage`,
-# MAGIC     planned_qty               AS `Planned Qty`,
-# MAGIC     need_by_date              AS `Need By Date`,
-# MAGIC     suggested_order_date      AS `Should Have Started`,
-# MAGIC     days_past_suggested_order AS `Days Late (Order)`,
-# MAGIC     days_past_need_by         AS `Days Past Need-By`
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
-# MAGIC WHERE escalation_level <= 4
-# MAGIC   AND escalation_level > 0
-# MAGIC ORDER BY 
-# MAGIC     escalation_level,
-# MAGIC     days_past_need_by DESC NULLS LAST,
-# MAGIC     days_past_suggested_order DESC NULLS LAST,
-# MAGIC     customer_tier;
-# MAGIC 
-# MAGIC 
-# MAGIC -- =====================================================================
-# MAGIC -- SHEET 2: Procurement Issues  (For Procurement Lead)
-# MAGIC -- Expected rows: ~1,020 (658 + 62 + 300)
-# MAGIC -- 
-# MAGIC -- Filter: BLOCKED_NO_VENDOR, BLOCKED_NO_LEAD_TIME, BLOCKED_NO_ROP_PARAMS
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     archetype                 AS `Archetype`,
-# MAGIC     plan_status               AS `Issue Type`,
-# MAGIC     item_no                   AS `Item No`,
-# MAGIC     description               AS `Description`,
-# MAGIC     item_category             AS `Category`,
-# MAGIC     demand_qty                AS `Demand Qty`,
-# MAGIC     onhand_available_qty      AS `On Hand`,
-# MAGIC     customer_tier             AS `Top Customer Tier`,
-# MAGIC     source_so_no              AS `Sample SO No`,
-# MAGIC     need_by_date              AS `Need By Date`,
-# MAGIC     exception_reason          AS `What's Missing`
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
-# MAGIC WHERE plan_status IN ('BLOCKED_NO_VENDOR', 'BLOCKED_NO_LEAD_TIME', 'BLOCKED_NO_ROP_PARAMS')
-# MAGIC ORDER BY 
-# MAGIC     plan_status,
-# MAGIC     archetype,
-# MAGIC     demand_qty DESC NULLS LAST;
-# MAGIC 
-# MAGIC 
-# MAGIC -- =====================================================================
-# MAGIC -- SHEET 3: Engineering Issues  (For Engineering Manager)
-# MAGIC -- Expected rows: ~25 (BLOCKED_BOM_NOT_CERTIFIED)
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     plan_status               AS `Issue Type`,
-# MAGIC     customer_tier             AS `Customer`,
-# MAGIC     is_dnd                    AS `DND`,
-# MAGIC     source_so_no              AS `Source SO`,
-# MAGIC     item_no                   AS `Item No`,
-# MAGIC     description               AS `Description`,
-# MAGIC     demand_qty                AS `Demand Qty`,
-# MAGIC     need_by_date              AS `Need By Date`,
-# MAGIC     days_past_suggested_order AS `Days Late`,
-# MAGIC     exception_reason          AS `Issue Detail`
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
-# MAGIC WHERE plan_status IN ('BLOCKED_BOM_NOT_CERTIFIED', 'BLOCKED_NO_BOM')
-# MAGIC ORDER BY 
-# MAGIC     is_dnd DESC NULLS LAST,
-# MAGIC     customer_tier,
-# MAGIC     days_past_suggested_order DESC NULLS LAST,
-# MAGIC     item_no;
-# MAGIC 
-# MAGIC 
-# MAGIC -- =====================================================================
-# MAGIC -- SHEET 4: Executive Summary  (For Leadership)
-# MAGIC -- 8 rows — 1 per status category
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC WITH stats AS (
-# MAGIC     SELECT 
-# MAGIC         plan_status,
-# MAGIC         COUNT(*) AS plan_count,
-# MAGIC         SUM(planned_qty) AS total_qty,
-# MAGIC         COUNT(DISTINCT item_no) AS unique_items,
-# MAGIC         COUNT(DISTINCT source_so_no) AS unique_so
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
-# MAGIC     WHERE plan_status IN (
-# MAGIC         'CRITICAL_LATE_DND', 'CRITICAL_LATE',
-# MAGIC         'OVERDUE_PROPOSED_DND', 'OVERDUE_PROPOSED',
-# MAGIC         'BLOCKED_NO_VENDOR', 'BLOCKED_NO_LEAD_TIME',
-# MAGIC         'BLOCKED_NO_ROP_PARAMS', 'BLOCKED_BOM_NOT_CERTIFIED'
-# MAGIC     )
-# MAGIC     GROUP BY plan_status
-# MAGIC )
-# MAGIC SELECT 
-# MAGIC     CASE 
-# MAGIC         WHEN plan_status = 'CRITICAL_LATE_DND' THEN 1
-# MAGIC         WHEN plan_status = 'CRITICAL_LATE' THEN 2
-# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED_DND' THEN 3
-# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED' THEN 4
-# MAGIC         WHEN plan_status = 'BLOCKED_NO_VENDOR' THEN 5
-# MAGIC         WHEN plan_status = 'BLOCKED_NO_LEAD_TIME' THEN 6
-# MAGIC         WHEN plan_status = 'BLOCKED_NO_ROP_PARAMS' THEN 7
-# MAGIC         WHEN plan_status = 'BLOCKED_BOM_NOT_CERTIFIED' THEN 8
-# MAGIC     END                       AS `Priority`,
-# MAGIC     plan_status               AS `Status`,
-# MAGIC     CASE 
-# MAGIC         WHEN plan_status LIKE 'CRITICAL%' OR plan_status LIKE 'OVERDUE%' THEN 'Production'
-# MAGIC         WHEN plan_status IN ('BLOCKED_NO_VENDOR', 'BLOCKED_NO_LEAD_TIME') THEN 'Procurement'
-# MAGIC         WHEN plan_status = 'BLOCKED_NO_ROP_PARAMS' THEN 'Master Data'
-# MAGIC         WHEN plan_status = 'BLOCKED_BOM_NOT_CERTIFIED' THEN 'Engineering'
-# MAGIC     END                       AS `Owner Team`,
-# MAGIC     CASE plan_status
-# MAGIC         WHEN 'CRITICAL_LATE_DND' THEN 'Items late + DND customer'
-# MAGIC         WHEN 'CRITICAL_LATE' THEN 'Items late, not DND'
-# MAGIC         WHEN 'OVERDUE_PROPOSED_DND' THEN 'Order start passed + DND'
-# MAGIC         WHEN 'OVERDUE_PROPOSED' THEN 'Order start passed'
-# MAGIC         WHEN 'BLOCKED_NO_VENDOR' THEN 'No vendor on Item card'
-# MAGIC         WHEN 'BLOCKED_NO_LEAD_TIME' THEN 'No Lead Time set'
-# MAGIC         WHEN 'BLOCKED_NO_ROP_PARAMS' THEN 'ROP item missing reorder params'
-# MAGIC         WHEN 'BLOCKED_BOM_NOT_CERTIFIED' THEN 'BOM exists but not Certified'
-# MAGIC     END                       AS `Description`,
-# MAGIC     plan_count                AS `Count`,
-# MAGIC     unique_items              AS `Unique Items`,
-# MAGIC     unique_so                 AS `Unique SO`,
-# MAGIC     ROUND(total_qty, 2)       AS `Total Qty`
-# MAGIC FROM stats
-# MAGIC ORDER BY `Priority`;
-
-# METADATA ********************
-
-# META {
-# META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# # nb_gold_view_planned_orders   (Phase 5 — View 1 of 7)
-
-# CELL ********************
-
-# MAGIC %%sql
-# MAGIC -- =====================================================================
-# MAGIC -- Notebook: nb_gold_view_planned_orders   (Phase 5 — View 1 of 7)
-# MAGIC -- Layer:    Gold MRP Engine — Public API Layer
-# MAGIC -- Output:   Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
-# MAGIC -- 
-# MAGIC -- Purpose:
-# MAGIC --   Master list ของ planned orders พร้อม:
-# MAGIC --     - Denormalized vendor info
-# MAGIC --     - Estimated cost (unit + total)
-# MAGIC --     - Priority aggregation
-# MAGIC --     - Revenue impact
-# MAGIC --     - Source SO traceability
-# MAGIC -- 
-# MAGIC -- Consumer: HTML Report, Power BI, Power Automate write-back
-# MAGIC -- Refresh:  Every MRP run
-# MAGIC -- 
-# MAGIC -- Adapted from spec (some fields simplified for pragmatic build):
-# MAGIC --   - planning_run_id: use unified_at as proxy (until orchestration in Phase 6)
-# MAGIC --   - parent_chain, casting_inputs: TBD (need PRO data — defer to View 5)
-# MAGIC --   - karat, color: derived from item_category + item_no pattern
-# MAGIC --   - scheduling_mode: BACKWARD if order_date >= today, FORWARD if late
-# MAGIC --   - schedule_warning: structured JSON for late items
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 1: Setup ==============
-# MAGIC 
-# MAGIC CREATE SCHEMA IF NOT EXISTS Gold_Inventory_Lakehouse.mrp;
-# MAGIC 
-# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = CORRECTED;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = CORRECTED;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = CORRECTED;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 2: Build gold_MRP_Planned_Orders ==============
-# MAGIC 
-# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
-# MAGIC USING DELTA
-# MAGIC AS
-# MAGIC WITH 
-# MAGIC -- Determine order_type per archetype
-# MAGIC plans_with_type AS (
-# MAGIC     SELECT 
-# MAGIC         u.*,
-# MAGIC         CASE 
-# MAGIC             WHEN u.archetype IN ('ALLOY', 'MPS') THEN 'PRODUCTION'
-# MAGIC             WHEN u.archetype = 'MST_DIRECT' THEN 'PRODUCTION'
-# MAGIC             WHEN u.archetype IN ('L4L', 'ROP', 'ORDER') THEN 'PURCHASE'
-# MAGIC             ELSE 'OTHER'
-# MAGIC         END AS order_type,
-# MAGIC         
-# MAGIC         -- Scheduling mode
-# MAGIC         CASE 
-# MAGIC             WHEN u.suggested_order_date IS NULL THEN 'UNKNOWN'
-# MAGIC             WHEN u.suggested_order_date <= DATE'1900-01-01' THEN 'UNKNOWN'
-# MAGIC             WHEN u.suggested_order_date >= CURRENT_DATE() THEN 'BACKWARD'
-# MAGIC             ELSE 'FORWARD'
-# MAGIC         END AS scheduling_mode,
-# MAGIC         
-# MAGIC         -- Delay days (0 if backward, positive if forward)
-# MAGIC         CASE 
-# MAGIC             WHEN u.suggested_order_date IS NULL THEN 0
-# MAGIC             WHEN u.suggested_order_date <= DATE'1900-01-01' THEN 0
-# MAGIC             WHEN u.suggested_order_date < CURRENT_DATE() 
-# MAGIC                 THEN DATEDIFF(CURRENT_DATE(), u.suggested_order_date)
-# MAGIC             ELSE 0
-# MAGIC         END AS delay_days
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified u
-# MAGIC ),
-# MAGIC 
-# MAGIC -- Item master enrichment for denormalized fields
-# MAGIC item_enrichment AS (
-# MAGIC     SELECT 
-# MAGIC         item_no,
-# MAGIC         description AS im_description,
-# MAGIC         item_category AS im_category,
-# MAGIC         base_uom AS uom,
-# MAGIC         unit_cost,
-# MAGIC         vendor_no AS im_vendor_no,
-# MAGIC         scrap_pct,
-# MAGIC         CASE 
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%14KY%' THEN '14KY'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%14KR%' THEN '14KR'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%14KW%' THEN '14KW'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%18KY%' THEN '18KY'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%18KR%' THEN '18KR'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%18KW%' THEN '18KW'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%9KY%' THEN '9KY'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%9KR%' THEN '9KR'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%9KW%' THEN '9KW'
-# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%SLV%' THEN 'Silver925'
-# MAGIC             ELSE NULL
-# MAGIC         END AS karat,
-# MAGIC         CASE 
-# MAGIC             WHEN item_no LIKE '%KY%' OR item_no LIKE '%-Y%' THEN 'Yellow'
-# MAGIC             WHEN item_no LIKE '%KR%' OR item_no LIKE '%-R%' THEN 'Rose'
-# MAGIC             WHEN item_no LIKE '%KW%' OR item_no LIKE '%SLV%' THEN 'White'
-# MAGIC             ELSE NULL
-# MAGIC         END AS color
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
-# MAGIC ),
-# MAGIC 
-# MAGIC -- Vendor info from BC (use BC vendor mirror if exists, else fallback)
-# MAGIC -- Note: backtick required for `No.` (BC dot-notation)
-# MAGIC -- If Vendor table not yet mirrored, this returns NULL safely
-# MAGIC vendor_lookup AS (
-# MAGIC     SELECT 
-# MAGIC         `No.` AS vendor_no,
-# MAGIC         Name AS vendor_name
-# MAGIC     FROM Silver_BC_Lakehouse.bc.Vendor
-# MAGIC     WHERE `BC Company` = 'Ennovie'
-# MAGIC ),
-# MAGIC 
-# MAGIC -- SO link aggregation (revenue + so list per plan)
-# MAGIC so_aggregation AS (
-# MAGIC     SELECT 
-# MAGIC         u.plan_id,
-# MAGIC         COUNT(DISTINCT u.source_so_no) AS affected_so_count,
-# MAGIC         COLLECT_LIST(DISTINCT u.source_so_no) AS affected_so_list,
-# MAGIC         -- For now, use linked SO line_amount as revenue proxy
-# MAGIC         -- (will be refined in Phase 5 cross-SO module)
-# MAGIC         SUM(COALESCE(so.line_amount_thb, 0)) AS total_revenue_impacted
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified u
-# MAGIC     LEFT JOIN Gold_Inventory_Lakehouse.mrp.gold_SO so 
-# MAGIC         ON u.source_so_no = so.so_no 
-# MAGIC         AND u.item_no = so.item_no
-# MAGIC         AND so.is_open = TRUE
-# MAGIC     GROUP BY u.plan_id
-# MAGIC )
-# MAGIC 
-# MAGIC -- Final SELECT with all denormalized fields
-# MAGIC SELECT 
-# MAGIC     -- Run identification (placeholder until Phase 6 orchestration)
-# MAGIC     DATE_FORMAT(p.unified_at, 'yyyyMMdd_HHmm') AS planning_run_id,
-# MAGIC     p.plan_id AS planned_order_id,
-# MAGIC     
-# MAGIC     -- Order classification
-# MAGIC     p.order_type,
-# MAGIC     p.archetype,
-# MAGIC     
-# MAGIC     -- Item info (denormalized)
-# MAGIC     p.item_no,
-# MAGIC     COALESCE(im.im_description, p.description)  AS item_description,
-# MAGIC     COALESCE(im.im_category, p.item_category)   AS item_category,
-# MAGIC     im.uom,
-# MAGIC     im.karat,
-# MAGIC     im.color,
-# MAGIC     
-# MAGIC     -- Quantities
-# MAGIC     p.demand_qty,
-# MAGIC     p.onhand_available_qty,
-# MAGIC     p.shortage_qty,
-# MAGIC     p.planned_qty AS qty,
-# MAGIC     
-# MAGIC     -- Dates & scheduling
-# MAGIC     p.suggested_order_date AS release_date,
-# MAGIC     p.need_by_date AS due_date,
-# MAGIC     p.scheduling_mode,
-# MAGIC     p.need_by_date AS original_due_date,
-# MAGIC     p.delay_days,
-# MAGIC     
-# MAGIC     -- Schedule warning (structured JSON for FORWARD mode)
-# MAGIC     CASE 
-# MAGIC         WHEN p.scheduling_mode = 'FORWARD' THEN 
-# MAGIC             CONCAT(
-# MAGIC                 '{"reason":"lead_time_insufficient",',
-# MAGIC                 '"delay_days":', CAST(p.delay_days AS STRING), ',',
-# MAGIC                 '"cs_action_required":', 
-# MAGIC                 CASE WHEN p.delay_days > 7 THEN 'true' ELSE 'false' END,
-# MAGIC                 ',"plan_status":"', p.plan_status, '"}'
-# MAGIC             )
-# MAGIC         ELSE NULL
-# MAGIC     END AS schedule_warning,
-# MAGIC     
-# MAGIC     -- Vendor info (denormalized from BC)
-# MAGIC     im.im_vendor_no AS vendor_no,
-# MAGIC     v.vendor_name,
-# MAGIC     
-# MAGIC     -- Cost info (estimated from Item Master)
-# MAGIC     COALESCE(im.unit_cost, 0) AS estimated_unit_cost,
-# MAGIC     ROUND(p.planned_qty * COALESCE(im.unit_cost, 0), 4) AS estimated_total_cost,
-# MAGIC     
-# MAGIC     -- Priority info
-# MAGIC     p.priority_weight AS priority_score,
-# MAGIC     p.is_dnd,
-# MAGIC     p.customer_tier,
-# MAGIC     
-# MAGIC     -- Affected SOs aggregation
-# MAGIC     p.source_so_no AS primary_source_so,
-# MAGIC     COALESCE(soa.affected_so_count, 1) AS affected_so_count,
-# MAGIC     COALESCE(soa.affected_so_list, ARRAY(p.source_so_no)) AS affected_so_list,
-# MAGIC     COALESCE(soa.total_revenue_impacted, 0) AS total_revenue_impacted,
-# MAGIC     
-# MAGIC     -- Plan status & escalation
-# MAGIC     p.plan_status,
-# MAGIC     p.original_plan_status,
-# MAGIC     p.escalation_level,
-# MAGIC     p.exception_reason,
-# MAGIC     
-# MAGIC     -- Days metrics (intelligence layer)
-# MAGIC     p.days_past_suggested_order,
-# MAGIC     p.days_until_need_by,
-# MAGIC     p.days_past_need_by,
-# MAGIC     
-# MAGIC     -- Tracking flags
-# MAGIC     p.is_order_date_overdue,
-# MAGIC     p.is_need_date_overdue,
-# MAGIC     
-# MAGIC     -- Metadata
-# MAGIC     p.unified_at AS created_at,
-# MAGIC     CURRENT_TIMESTAMP() AS view_built_at
-# MAGIC     
-# MAGIC FROM plans_with_type p
-# MAGIC LEFT JOIN item_enrichment im ON p.item_no = im.item_no
-# MAGIC LEFT JOIN vendor_lookup v ON im.im_vendor_no = v.vendor_no
-# MAGIC LEFT JOIN so_aggregation soa ON p.plan_id = soa.plan_id;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 3: Validation — row count + column check ==============
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     COUNT(*) AS total_planned_orders,
-# MAGIC     COUNT(DISTINCT planning_run_id) AS run_count,
-# MAGIC     COUNT(DISTINCT archetype) AS archetype_count,
-# MAGIC     COUNT(DISTINCT item_no) AS unique_items,
-# MAGIC     SUM(CASE WHEN scheduling_mode = 'BACKWARD' THEN 1 ELSE 0 END) AS backward_count,
-# MAGIC     SUM(CASE WHEN scheduling_mode = 'FORWARD' THEN 1 ELSE 0 END) AS forward_count,
-# MAGIC     SUM(CASE WHEN vendor_name IS NOT NULL THEN 1 ELSE 0 END) AS with_vendor_name,
-# MAGIC     SUM(CASE WHEN estimated_unit_cost > 0 THEN 1 ELSE 0 END) AS with_cost,
-# MAGIC     ROUND(SUM(estimated_total_cost), 2) AS total_estimated_cost,
-# MAGIC     ROUND(SUM(total_revenue_impacted), 2) AS total_revenue_impacted
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 4: Order type breakdown ==============
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     order_type,
-# MAGIC     archetype,
-# MAGIC     COUNT(*) AS plan_count,
-# MAGIC     COUNT(DISTINCT item_no) AS unique_items,
-# MAGIC     SUM(CASE WHEN scheduling_mode = 'FORWARD' THEN 1 ELSE 0 END) AS forward_count,
-# MAGIC     ROUND(AVG(delay_days), 1) AS avg_delay,
-# MAGIC     ROUND(SUM(qty), 2) AS total_qty,
-# MAGIC     ROUND(SUM(estimated_total_cost), 2) AS total_cost,
-# MAGIC     ROUND(SUM(total_revenue_impacted), 2) AS total_revenue
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
-# MAGIC GROUP BY order_type, archetype
-# MAGIC ORDER BY order_type, archetype;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 5: Forward scheduling — CS-facing query ==============
-# MAGIC -- Items ที่ลีดไทม์ไม่ทันแล้ว — CS ต้องแจ้งลูกค้า
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     planning_run_id,
-# MAGIC     archetype,
-# MAGIC     customer_tier,
-# MAGIC     is_dnd,
-# MAGIC     primary_source_so,
-# MAGIC     item_no,
-# MAGIC     item_description,
-# MAGIC     qty,
-# MAGIC     original_due_date,
-# MAGIC     delay_days,
-# MAGIC     plan_status,
-# MAGIC     schedule_warning,
-# MAGIC     affected_so_count,
-# MAGIC     ROUND(total_revenue_impacted, 2) AS revenue_impacted_thb,
-# MAGIC     ROUND(estimated_total_cost, 2) AS estimated_cost
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
-# MAGIC WHERE scheduling_mode = 'FORWARD'
-# MAGIC   AND delay_days > 0
-# MAGIC ORDER BY 
-# MAGIC     is_dnd DESC NULLS LAST,
-# MAGIC     delay_days DESC,
-# MAGIC     total_revenue_impacted DESC NULLS LAST
-# MAGIC LIMIT 30;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 6: Vendor coverage check ==============
-# MAGIC -- ดูว่า PURCHASE archetypes มี vendor info ครบหรือไม่
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     archetype,
-# MAGIC     COUNT(*) AS total_plans,
-# MAGIC     SUM(CASE WHEN vendor_no IS NOT NULL THEN 1 ELSE 0 END) AS with_vendor_no,
-# MAGIC     SUM(CASE WHEN vendor_name IS NOT NULL THEN 1 ELSE 0 END) AS with_vendor_name,
-# MAGIC     ROUND(100.0 * SUM(CASE WHEN vendor_name IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_with_name
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
-# MAGIC WHERE order_type = 'PURCHASE'
-# MAGIC GROUP BY archetype
-# MAGIC ORDER BY archetype;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 7: Cost coverage check ==============
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     archetype,
-# MAGIC     COUNT(*) AS total_plans,
-# MAGIC     SUM(CASE WHEN estimated_unit_cost > 0 THEN 1 ELSE 0 END) AS with_cost,
-# MAGIC     ROUND(100.0 * SUM(CASE WHEN estimated_unit_cost > 0 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_with_cost,
-# MAGIC     ROUND(SUM(estimated_total_cost), 2) AS total_cost_thb,
-# MAGIC     ROUND(AVG(estimated_unit_cost), 2) AS avg_unit_cost
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
-# MAGIC GROUP BY archetype
-# MAGIC ORDER BY total_cost_thb DESC NULLS LAST;
-
-# METADATA ********************
-
-# META {
-# META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# # nb_gold_view_actions   (Phase 5 — View 2 of 7)
-
-# CELL ********************
-
-# MAGIC %%sql
-# MAGIC -- =====================================================================
-# MAGIC -- Notebook: nb_gold_view_actions   (Phase 5 — View 2 of 7)
-# MAGIC -- Layer:    Gold MRP Engine — Public API Layer
-# MAGIC -- Output:   Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
-# MAGIC -- 
-# MAGIC -- Purpose:
-# MAGIC --   Action messages พร้อม severity, recommended_action, dampener
-# MAGIC --   Derived from plan_status + escalation_level + days_past_*
-# MAGIC -- 
-# MAGIC -- Consumer: Claude AI agent, Teams alerts, Power Automate notifications
-# MAGIC -- Refresh:  Every MRP run
-# MAGIC -- 
-# MAGIC -- Logic:
-# MAGIC --   - Action types: EXPEDITE, EXPEDITE_DND, CREATE, CREATE_URGENT, REVIEW_BOM, FIX_DATA
-# MAGIC --   - Severity: critical, high, medium, low (from escalation_level)
-# MAGIC --   - Dampener: skip if days_off < 3 days (avoid alert fatigue)
-# MAGIC --   - Status: pending (not yet acted on)
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 1: Setup ==============
-# MAGIC 
-# MAGIC CREATE SCHEMA IF NOT EXISTS Gold_Inventory_Lakehouse.mrp;
-# MAGIC 
-# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = CORRECTED;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = CORRECTED;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = CORRECTED;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 2: Build gold_MRP_Actions ==============
-# MAGIC 
-# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
-# MAGIC USING DELTA
-# MAGIC AS
-# MAGIC WITH 
-# MAGIC -- Source: actionable plans (exclude COVERED_BY_STOCK and NO_TRIGGER)
-# MAGIC actionable_plans AS (
-# MAGIC     SELECT *
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
-# MAGIC     WHERE plan_status NOT IN ('COVERED_BY_STOCK', 'NO_TRIGGER')
-# MAGIC       AND escalation_level <= 6
-# MAGIC )
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     -- Identity
-# MAGIC     UUID()                  AS action_id,
-# MAGIC     planning_run_id,
-# MAGIC     planned_order_id,
-# MAGIC     
-# MAGIC     -- Action classification
-# MAGIC     CASE 
-# MAGIC         WHEN plan_status = 'CRITICAL_LATE_DND'        THEN 'EXPEDITE_DND'
-# MAGIC         WHEN plan_status = 'CRITICAL_LATE'            THEN 'EXPEDITE'
-# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED_DND'     THEN 'CREATE_URGENT_DND'
-# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED'         THEN 'CREATE_URGENT'
-# MAGIC         WHEN plan_status LIKE 'BLOCKED_NO_VENDOR%'    THEN 'FIX_VENDOR'
-# MAGIC         WHEN plan_status LIKE 'BLOCKED_NO_LEAD%'      THEN 'FIX_LEAD_TIME'
-# MAGIC         WHEN plan_status LIKE 'BLOCKED_NO_ROP%'       THEN 'FIX_ROP_PARAMS'
-# MAGIC         WHEN plan_status LIKE 'BLOCKED_BOM%'          THEN 'CERTIFY_BOM'
-# MAGIC         WHEN plan_status = 'PROPOSED_DND'             THEN 'CREATE_DND'
-# MAGIC         WHEN plan_status = 'PROPOSED'                 THEN 'CREATE'
-# MAGIC         ELSE 'REVIEW'
-# MAGIC     END AS action_type,
-# MAGIC     
-# MAGIC     -- Severity (4 levels)
-# MAGIC     CASE 
-# MAGIC         WHEN escalation_level = 1 THEN 'critical'  -- CRITICAL_LATE_DND
-# MAGIC         WHEN escalation_level = 2 THEN 'high'      -- CRITICAL_LATE
-# MAGIC         WHEN escalation_level = 3 THEN 'high'      -- OVERDUE_DND
-# MAGIC         WHEN escalation_level = 4 THEN 'medium'    -- OVERDUE
-# MAGIC         WHEN escalation_level = 5 THEN 'medium'    -- PROPOSED_DND
-# MAGIC         WHEN escalation_level = 6 THEN 'low'       -- PROPOSED
-# MAGIC         WHEN escalation_level = 0 THEN 'high'      -- BLOCKED (data issue)
-# MAGIC         ELSE 'low'
-# MAGIC     END AS severity,
-# MAGIC     
-# MAGIC     -- Owner team (who needs to act)
-# MAGIC     CASE 
-# MAGIC         WHEN plan_status LIKE 'CRITICAL%' OR plan_status LIKE 'OVERDUE%' THEN 'Production'
-# MAGIC         WHEN plan_status IN ('BLOCKED_NO_VENDOR', 'BLOCKED_NO_LEAD_TIME') THEN 'Procurement'
-# MAGIC         WHEN plan_status = 'BLOCKED_NO_ROP_PARAMS' THEN 'Master Data'
-# MAGIC         WHEN plan_status = 'BLOCKED_BOM_NOT_CERTIFIED' THEN 'Engineering'
-# MAGIC         WHEN plan_status LIKE 'PROPOSED%' AND order_type = 'PURCHASE' THEN 'Procurement'
-# MAGIC         WHEN plan_status LIKE 'PROPOSED%' AND order_type = 'PRODUCTION' THEN 'Production'
-# MAGIC         ELSE 'Planning'
-# MAGIC     END AS owner_team,
-# MAGIC     
-# MAGIC     -- Item/order info (denormalized)
-# MAGIC     item_no,
-# MAGIC     item_description,
-# MAGIC     archetype,
-# MAGIC     qty AS shortfall_qty,
-# MAGIC     
-# MAGIC     -- Date info
-# MAGIC     release_date AS target_release_date,
-# MAGIC     due_date AS target_due_date,
-# MAGIC     delay_days AS days_off,
-# MAGIC     
-# MAGIC     -- Dampener logic (avoid alert fatigue)
-# MAGIC     -- Dampener applied if: small delay AND not DND AND not critical
-# MAGIC     CASE 
-# MAGIC         WHEN delay_days < 3 AND is_dnd = FALSE 
-# MAGIC             AND plan_status NOT IN ('CRITICAL_LATE_DND', 'CRITICAL_LATE')
-# MAGIC             THEN TRUE
-# MAGIC         ELSE FALSE
-# MAGIC     END AS dampener_applied,
-# MAGIC     
-# MAGIC     CASE 
-# MAGIC         WHEN delay_days < 3 AND is_dnd = FALSE 
-# MAGIC             AND plan_status NOT IN ('CRITICAL_LATE_DND', 'CRITICAL_LATE')
-# MAGIC             THEN 'minor_delay_below_threshold'
-# MAGIC         ELSE NULL
-# MAGIC     END AS dampener_reason,
-# MAGIC     
-# MAGIC     -- Customer/SO context
-# MAGIC     primary_source_so,
-# MAGIC     customer_tier,
-# MAGIC     is_dnd,
-# MAGIC     affected_so_count,
-# MAGIC     affected_so_list,
-# MAGIC     total_revenue_impacted AS revenue_at_risk,
-# MAGIC     
-# MAGIC     -- Recommended action (human-readable)
-# MAGIC     CASE 
-# MAGIC         WHEN plan_status = 'CRITICAL_LATE_DND' THEN 
-# MAGIC             CONCAT('🚨 EXPEDITE NOW — DND customer ', COALESCE(customer_tier, ''), 
-# MAGIC                 ', ', CAST(delay_days AS STRING), ' days late, ', 
-# MAGIC                 CAST(affected_so_count AS STRING), ' SO(s) affected. Contact customer + supplier immediately.')
-# MAGIC         WHEN plan_status = 'CRITICAL_LATE' THEN 
-# MAGIC             CONCAT('🚨 EXPEDITE — ', CAST(delay_days AS STRING), ' days late, item: ', item_no)
-# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED_DND' THEN 
-# MAGIC             CONCAT('⚡ CREATE PO/PRO URGENTLY — DND ', COALESCE(customer_tier, ''), 
-# MAGIC                 ', should have ordered ', CAST(delay_days AS STRING), ' days ago.')
-# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED' THEN 
-# MAGIC             CONCAT('⚠️ CREATE PO/PRO — overdue by ', CAST(delay_days AS STRING), ' days.')
-# MAGIC         WHEN plan_status = 'BLOCKED_NO_VENDOR' THEN 
-# MAGIC             CONCAT('❌ Procurement: Set vendor on Item card for ', item_no, ' (qty ', CAST(qty AS STRING), ')')
-# MAGIC         WHEN plan_status = 'BLOCKED_NO_LEAD_TIME' THEN 
-# MAGIC             CONCAT('❌ Procurement: Set Lead Time Calculation on Item ', item_no)
-# MAGIC         WHEN plan_status = 'BLOCKED_NO_ROP_PARAMS' THEN 
-# MAGIC             CONCAT('❌ Master Data: Set Reorder Point/Quantity for ', item_no)
-# MAGIC         WHEN plan_status = 'BLOCKED_BOM_NOT_CERTIFIED' THEN 
-# MAGIC             CONCAT('❌ Engineering: Certify BOM for FG ', item_no, 
-# MAGIC                 ' (customer: ', COALESCE(customer_tier, 'unknown'), ')')
-# MAGIC         WHEN plan_status = 'PROPOSED_DND' THEN 
-# MAGIC             CONCAT('🟡 Create ', 
-# MAGIC                 CASE WHEN order_type = 'PURCHASE' THEN 'PO' ELSE 'Production Order' END,
-# MAGIC                 ' — DND customer, on time')
-# MAGIC         WHEN plan_status = 'PROPOSED' THEN 
-# MAGIC             CONCAT('🟢 Routine: Create ',
-# MAGIC                 CASE WHEN order_type = 'PURCHASE' THEN 'PO' ELSE 'Production Order' END)
-# MAGIC         ELSE 'Review plan status'
-# MAGIC     END AS recommended_action,
-# MAGIC     
-# MAGIC     -- Plan status reference
-# MAGIC     plan_status,
-# MAGIC     escalation_level,
-# MAGIC     exception_reason,
-# MAGIC     
-# MAGIC     -- Status (initial state)
-# MAGIC     'pending' AS status,
-# MAGIC     
-# MAGIC     -- Decision log placeholder (Phase 6 will populate)
-# MAGIC     CAST(NULL AS STRING) AS decision_log,
-# MAGIC     
-# MAGIC     -- Metadata
-# MAGIC     CURRENT_TIMESTAMP() AS created_at
-# MAGIC     
-# MAGIC FROM actionable_plans;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 3: Validation — overall stats ==============
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     COUNT(*) AS total_actions,
-# MAGIC     SUM(CASE WHEN dampener_applied THEN 1 ELSE 0 END) AS dampened,
-# MAGIC     SUM(CASE WHEN NOT dampener_applied THEN 1 ELSE 0 END) AS active_alerts,
-# MAGIC     COUNT(DISTINCT owner_team) AS owner_teams,
-# MAGIC     COUNT(DISTINCT action_type) AS action_types,
-# MAGIC     ROUND(SUM(revenue_at_risk), 2) AS total_revenue_at_risk
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 4: Severity × Owner Team distribution ==============
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     severity,
-# MAGIC     owner_team,
-# MAGIC     COUNT(*) AS action_count,
-# MAGIC     SUM(CASE WHEN dampener_applied THEN 1 ELSE 0 END) AS dampened,
-# MAGIC     SUM(CASE WHEN NOT dampener_applied THEN 1 ELSE 0 END) AS active_alerts,
-# MAGIC     ROUND(SUM(revenue_at_risk), 2) AS revenue_at_risk
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
-# MAGIC GROUP BY severity, owner_team
-# MAGIC ORDER BY 
-# MAGIC     CASE severity 
-# MAGIC         WHEN 'critical' THEN 1 
-# MAGIC         WHEN 'high' THEN 2 
-# MAGIC         WHEN 'medium' THEN 3 
-# MAGIC         ELSE 4 
-# MAGIC     END,
-# MAGIC     action_count DESC;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 5: Action type breakdown ==============
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     action_type,
-# MAGIC     severity,
-# MAGIC     owner_team,
-# MAGIC     COUNT(*) AS action_count,
-# MAGIC     ROUND(AVG(days_off), 1) AS avg_days_off,
-# MAGIC     SUM(CASE WHEN is_dnd THEN 1 ELSE 0 END) AS dnd_count
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
-# MAGIC GROUP BY action_type, severity, owner_team
-# MAGIC ORDER BY action_count DESC;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 6: Top 30 critical active alerts (no dampener) ==============
-# MAGIC 
-# MAGIC SELECT 
-# MAGIC     severity,
-# MAGIC     owner_team,
-# MAGIC     action_type,
-# MAGIC     customer_tier,
-# MAGIC     is_dnd,
-# MAGIC     primary_source_so,
-# MAGIC     item_no,
-# MAGIC     item_description,
-# MAGIC     shortfall_qty,
-# MAGIC     days_off,
-# MAGIC     affected_so_count,
-# MAGIC     ROUND(revenue_at_risk, 2) AS revenue_at_risk_thb,
-# MAGIC     recommended_action
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
-# MAGIC WHERE NOT dampener_applied
-# MAGIC   AND severity IN ('critical', 'high')
-# MAGIC ORDER BY 
-# MAGIC     CASE severity WHEN 'critical' THEN 1 ELSE 2 END,
-# MAGIC     revenue_at_risk DESC NULLS LAST,
-# MAGIC     days_off DESC NULLS LAST
-# MAGIC LIMIT 30;
-
-# METADATA ********************
-
-# META {
-# META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# # nb_gold_view_pro_dependency   (Phase 5 — View 5 of 7)
-
-# CELL ********************
-
-# MAGIC %%sql
-# MAGIC -- =====================================================================
-# MAGIC -- Notebook: nb_gold_view_pro_dependency  (Phase 5 — View 5 of 7) — v2 PATCHED
-# MAGIC -- Layer:    Gold MRP Engine — Public API Layer
-# MAGIC -- Output:   Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
-# MAGIC --
-# MAGIC -- ⚡ v2 CHANGES (Apr 26, 2026):
-# MAGIC --   [FIX 1] is_overdue: BC `Finished Date` is `0001-01-01` (not NULL) for active PROs.
-# MAGIC --           Use ` > DATE'1900-01-01'` check, not `IS NULL`.
-# MAGIC --   [FIX 2] Apply same fix to all date NULL handling: pro_finished_date,
-# MAGIC --           line_due_date, line_starting_date, line_ending_date, pro_due_date.
-# MAGIC --   [FIX 3] Add `is_finished_via_completion` flag (line_finished_qty >= line_qty)
-# MAGIC --           because Released PROs may be physically complete but not yet posted.
-# MAGIC --   [NEW]   Cell 7 rewritten with proper grain matching (item-level dedup)
-# MAGIC --           + new flag column `has_existing_pro` baked into the table itself,
-# MAGIC --           so HTML report can filter "true new" actions without a self-join.
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 1: Setup ==============
-# MAGIC 
-# MAGIC CREATE SCHEMA IF NOT EXISTS Gold_Inventory_Lakehouse.mrp;
-# MAGIC 
-# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = CORRECTED;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = CORRECTED;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = CORRECTED;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 2: Build gold_PRO_Dependency (PATCHED) ==============
-# MAGIC 
-# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
-# MAGIC USING DELTA
-# MAGIC AS
-# MAGIC WITH
-# MAGIC -- BC NULL date sentinel = '0001-01-01'. Anything <= 1900-01-01 = effectively NULL.
-# MAGIC -- We pre-clean dates in the source CTEs so downstream logic becomes simple.
-# MAGIC 
-# MAGIC active_pro_headers AS (
-# MAGIC     SELECT
-# MAGIC         h.`No.`                          AS pro_no,
-# MAGIC         h.Status                         AS pro_status,
-# MAGIC         h.`Source No.`                   AS source_item_no,
-# MAGIC         h.Description                    AS pro_description,
-# MAGIC         h.`Source Type`                  AS source_type,
-# MAGIC         CASE WHEN h.`For Prod.Order No.` = '' THEN NULL ELSE h.`For Prod.Order No.` END AS parent_pro_no,
-# MAGIC         CASE WHEN h.`For Item` = '' THEN NULL ELSE h.`For Item` END AS for_item,
-# MAGIC         CASE WHEN h.`Sales Order No.` = '' THEN NULL ELSE h.`Sales Order No.` END AS header_so_no,
-# MAGIC         h.`Sales Order Line No.`         AS header_so_line_no,
-# MAGIC         -- Clean BC sentinel dates (0001-01-01) → NULL
-# MAGIC         CASE WHEN h.`Starting Date` > DATE'1900-01-01' THEN h.`Starting Date` END AS pro_starting_date,
-# MAGIC         CASE WHEN h.`Ending Date`   > DATE'1900-01-01' THEN h.`Ending Date`   END AS pro_ending_date,
-# MAGIC         CASE WHEN h.`Due Date`      > DATE'1900-01-01' THEN h.`Due Date`      END AS pro_due_date,
-# MAGIC         CASE WHEN h.`Finished Date` > DATE'1900-01-01' THEN h.`Finished Date` END AS pro_finished_date,
-# MAGIC         h.Quantity                       AS pro_qty,
-# MAGIC         h.`Unit Cost`                    AS pro_unit_cost,
-# MAGIC         h.`Cost Amount`                  AS pro_cost_amount,
-# MAGIC         h.`Location Code`                AS pro_location,
-# MAGIC         h.`Low-Level Code`               AS low_level_code,
-# MAGIC         h.`Replan Ref. Status`           AS replan_status,
-# MAGIC         h.`Ready to Finish Flag`         AS ready_to_finish,
-# MAGIC         h.`Cons vs Exp > Tol Flag`       AS consumption_variance_flag,
-# MAGIC         h.Blocked                        AS pro_blocked
-# MAGIC     FROM Silver_BC_Lakehouse.bc.`Production Order` h
-# MAGIC     WHERE h.`BC Company` = 'Ennovie'
-# MAGIC       AND h.Status IN ('Released', 'Firm Planned', 'Planned')
-# MAGIC ),
-# MAGIC 
-# MAGIC pro_lines AS (
-# MAGIC     SELECT
-# MAGIC         l.`Prod. Order No.`              AS pro_no,
-# MAGIC         l.`Line No.`                     AS line_no,
-# MAGIC         l.`Item No.`                     AS item_no,
-# MAGIC         l.Description                    AS line_description,
-# MAGIC         l.Quantity                       AS line_qty,
-# MAGIC         l.`Finished Quantity`            AS line_finished_qty,
-# MAGIC         l.`Remaining Quantity`           AS line_remaining_qty,
-# MAGIC         -- Clean BC sentinel dates
-# MAGIC         CASE WHEN l.`Due Date`      > DATE'1900-01-01' THEN l.`Due Date`      END AS line_due_date,
-# MAGIC         CASE WHEN l.`Starting Date` > DATE'1900-01-01' THEN l.`Starting Date` END AS line_starting_date,
-# MAGIC         CASE WHEN l.`Ending Date`   > DATE'1900-01-01' THEN l.`Ending Date`   END AS line_ending_date,
-# MAGIC         l.`Planning Level Code`          AS planning_level_code,
-# MAGIC         CASE l.`Planning Level Code`
-# MAGIC             WHEN 0 THEN 'FG'
-# MAGIC             WHEN 1 THEN 'SEMI'
-# MAGIC             WHEN 2 THEN 'WAX_WH'
-# MAGIC             ELSE CONCAT('LEVEL_', CAST(l.`Planning Level Code` AS STRING))
-# MAGIC         END                              AS planning_level_label,
-# MAGIC         CASE WHEN l.`Production BOM No.` = '' THEN NULL ELSE l.`Production BOM No.` END AS bom_no,
-# MAGIC         l.`Production BOM Version Code`  AS bom_version,
-# MAGIC         CASE WHEN l.`Routing No.` = '' THEN NULL ELSE l.`Routing No.` END AS routing_no,
-# MAGIC         CASE WHEN l.`Sales Order No.` = '' THEN NULL ELSE l.`Sales Order No.` END AS line_so_no,
-# MAGIC         l.`Sales Order Line No.`         AS line_so_line_no,
-# MAGIC         CASE WHEN l.`RFID Code` = '' THEN NULL ELSE l.`RFID Code` END AS rfid_code,
-# MAGIC         l.`Unit Cost`                    AS line_unit_cost,
-# MAGIC         l.`Cost Amount`                  AS line_cost_amount,
-# MAGIC         l.Priority                       AS line_priority,
-# MAGIC         l.`Location Code`                AS line_location,
-# MAGIC         l.`MPS Order`                    AS mps_order_flag
-# MAGIC     FROM Silver_BC_Lakehouse.bc.`Prod Order Line` l
-# MAGIC     WHERE l.`BC Company` = 'Ennovie'
-# MAGIC       AND l.Status IN ('Released', 'Firm Planned', 'Planned')
-# MAGIC ),
-# MAGIC 
-# MAGIC component_summary AS (
-# MAGIC     SELECT
-# MAGIC         c.`Prod. Order No.`              AS pro_no,
-# MAGIC         c.`Prod. Order Line No.`         AS line_no,
-# MAGIC         COUNT(*)                         AS component_count,
-# MAGIC         COUNT(DISTINCT c.`Item No.`)     AS unique_components,
-# MAGIC         SUM(c.Quantity)                  AS total_component_qty,
-# MAGIC         SUM(c.`Remaining Quantity`)      AS total_remaining_qty,
-# MAGIC         SUM(c.`Cost Amount`)             AS total_component_cost,
-# MAGIC         COLLECT_LIST(DISTINCT c.`Item No.`) AS component_items
-# MAGIC     FROM Silver_BC_Lakehouse.bc.`Prod Order Component` c
-# MAGIC     WHERE c.`BC Company` = 'Ennovie'
-# MAGIC       AND c.Status IN ('Released', 'Firm Planned', 'Planned')
-# MAGIC     GROUP BY c.`Prod. Order No.`, c.`Prod. Order Line No.`
-# MAGIC ),
-# MAGIC 
-# MAGIC so_enrichment AS (
-# MAGIC     SELECT DISTINCT
-# MAGIC         so.so_no,
-# MAGIC         so.so_line_no,
-# MAGIC         so.customer_no,
-# MAGIC         so.customer_name,
-# MAGIC         so.customer_tier_code,
-# MAGIC         so.is_dnd,
-# MAGIC         so.dnd_exceed_date,
-# MAGIC         so.ship_date         AS so_ship_date,
-# MAGIC         so.line_amount_thb   AS so_line_amount_thb
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_SO so
-# MAGIC     WHERE so.is_open = TRUE
-# MAGIC ),
-# MAGIC 
-# MAGIC -- [NEW v2] Build a set of (item_no, source_so_no) pairs that the engine
-# MAGIC -- has flagged as "needs new plan". We'll left-join this into the final
-# MAGIC -- view so each PRO line knows whether it overlaps an engine recommendation.
-# MAGIC engine_plan_keys AS (
-# MAGIC     SELECT DISTINCT
-# MAGIC         item_no,
-# MAGIC         source_so_no
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
-# MAGIC     WHERE plan_status NOT IN ('COVERED_BY_STOCK', 'NO_TRIGGER')
-# MAGIC       AND plan_status NOT LIKE 'BLOCKED%'
-# MAGIC )
-# MAGIC 
-# MAGIC -- =========================
-# MAGIC -- Final SELECT — denormalized PRO chain
-# MAGIC -- =========================
-# MAGIC SELECT
-# MAGIC     -- PRO identification
-# MAGIC     h.pro_no,
-# MAGIC     h.pro_status,
-# MAGIC     h.source_item_no,
-# MAGIC     h.pro_description,
-# MAGIC 
-# MAGIC     -- Line info
-# MAGIC     l.line_no,
-# MAGIC     l.item_no                            AS line_item_no,
-# MAGIC     l.line_description,
-# MAGIC     l.planning_level_code,
-# MAGIC     l.planning_level_label,
-# MAGIC 
-# MAGIC     -- BOM info
-# MAGIC     l.bom_no,
-# MAGIC     l.bom_version,
-# MAGIC     l.routing_no,
-# MAGIC 
-# MAGIC     -- Quantities
-# MAGIC     l.line_qty,
-# MAGIC     l.line_finished_qty,
-# MAGIC     l.line_remaining_qty,
-# MAGIC     ROUND(
-# MAGIC         CASE
-# MAGIC             WHEN l.line_qty > 0
-# MAGIC                 THEN 100.0 * l.line_finished_qty / l.line_qty
-# MAGIC             ELSE 0
-# MAGIC         END, 1
-# MAGIC     )                                    AS pct_complete,
-# MAGIC 
-# MAGIC     -- [FIX 3] Physical completion flag (qty produced ≥ qty planned)
-# MAGIC     CASE
-# MAGIC         WHEN l.line_qty > 0 AND l.line_finished_qty >= l.line_qty THEN TRUE
-# MAGIC         ELSE FALSE
-# MAGIC     END                                  AS is_finished_via_completion,
-# MAGIC 
-# MAGIC     -- Dates (cleaned)
-# MAGIC     l.line_starting_date,
-# MAGIC     l.line_ending_date,
-# MAGIC     l.line_due_date,
-# MAGIC     h.pro_finished_date,
-# MAGIC     h.pro_due_date,
-# MAGIC 
-# MAGIC     -- Days metrics
-# MAGIC     CASE
-# MAGIC         WHEN l.line_due_date IS NULL THEN NULL
-# MAGIC         ELSE DATEDIFF(l.line_due_date, CURRENT_DATE())
-# MAGIC     END                                  AS days_until_due,
-# MAGIC 
-# MAGIC     -- [FIX 1+2] is_overdue: line is overdue iff
-# MAGIC     --   1) line_due_date is real (not BC sentinel)
-# MAGIC     --   2) due date in the past
-# MAGIC     --   3) PRO not yet posted as finished (pro_finished_date IS NULL after cleaning)
-# MAGIC     --   4) line not yet physically complete
-# MAGIC     CASE
-# MAGIC         WHEN l.line_due_date IS NULL                          THEN FALSE  -- no real due date
-# MAGIC         WHEN l.line_due_date >= CURRENT_DATE()                THEN FALSE  -- not yet due
-# MAGIC         WHEN h.pro_finished_date IS NOT NULL                  THEN FALSE  -- already posted finished
-# MAGIC         WHEN l.line_qty > 0
-# MAGIC          AND l.line_finished_qty >= l.line_qty                THEN FALSE  -- physically complete
-# MAGIC         ELSE TRUE
-# MAGIC     END                                  AS is_overdue,
-# MAGIC 
-# MAGIC     -- Days overdue (positive number when late, NULL when not overdue)
-# MAGIC     CASE
-# MAGIC         WHEN l.line_due_date IS NULL                          THEN NULL
-# MAGIC         WHEN l.line_due_date >= CURRENT_DATE()                THEN NULL
-# MAGIC         WHEN h.pro_finished_date IS NOT NULL                  THEN NULL
-# MAGIC         WHEN l.line_qty > 0
-# MAGIC          AND l.line_finished_qty >= l.line_qty                THEN NULL
-# MAGIC         ELSE DATEDIFF(CURRENT_DATE(), l.line_due_date)
-# MAGIC     END                                  AS days_overdue,
-# MAGIC 
-# MAGIC     -- Cost
-# MAGIC     l.line_unit_cost,
-# MAGIC     l.line_cost_amount,
-# MAGIC 
-# MAGIC     -- Parent linkage
-# MAGIC     h.parent_pro_no,
-# MAGIC     h.for_item,
-# MAGIC 
-# MAGIC     -- SO linkage (line OR header)
-# MAGIC     COALESCE(l.line_so_no, h.header_so_no)              AS source_so_no,
-# MAGIC     COALESCE(l.line_so_line_no, h.header_so_line_no)    AS source_so_line_no,
-# MAGIC 
-# MAGIC     -- Customer info
-# MAGIC     soe.customer_no,
-# MAGIC     soe.customer_name,
-# MAGIC     soe.customer_tier_code               AS customer_tier,
-# MAGIC     soe.is_dnd,
-# MAGIC     soe.so_ship_date,
-# MAGIC     soe.so_line_amount_thb,
-# MAGIC 
-# MAGIC     -- Component summary
-# MAGIC     COALESCE(cs.component_count, 0)      AS component_count,
-# MAGIC     COALESCE(cs.unique_components, 0)    AS unique_components,
-# MAGIC     cs.total_component_qty,
-# MAGIC     cs.total_remaining_qty,
-# MAGIC     cs.total_component_cost,
-# MAGIC     cs.component_items,
-# MAGIC 
-# MAGIC     -- Status flags
-# MAGIC     l.mps_order_flag,
-# MAGIC     h.ready_to_finish,
-# MAGIC     h.consumption_variance_flag,
-# MAGIC     h.replan_status,
-# MAGIC     h.pro_blocked,
-# MAGIC     l.rfid_code,
-# MAGIC 
-# MAGIC     -- Location
-# MAGIC     l.line_location,
-# MAGIC 
-# MAGIC     -- Priority
-# MAGIC     l.line_priority,
-# MAGIC 
-# MAGIC     -- Type classification
-# MAGIC     CASE
-# MAGIC         WHEN h.pro_no LIKE 'CAS%'                       THEN 'CASTING'
-# MAGIC         WHEN h.pro_no LIKE 'WRO%'                       THEN 'FG_PRODUCTION'
-# MAGIC         WHEN h.pro_no LIKE 'WSEMI%' OR h.pro_no LIKE 'SEMI%' THEN 'SEMI'
-# MAGIC         WHEN l.planning_level_code = 0                  THEN 'FG_PRODUCTION'
-# MAGIC         WHEN l.planning_level_code = 1                  THEN 'SEMI'
-# MAGIC         WHEN l.planning_level_code = 2                  THEN 'WAX_WH'
-# MAGIC         ELSE 'OTHER'
-# MAGIC     END                                  AS pro_type,
-# MAGIC 
-# MAGIC     -- [NEW v2] Engine overlap flag — TRUE if MRP engine also wants this (item, SO)
-# MAGIC     CASE
-# MAGIC         WHEN ek.item_no IS NOT NULL THEN TRUE
-# MAGIC         ELSE FALSE
-# MAGIC     END                                  AS has_engine_recommendation,
-# MAGIC 
-# MAGIC     -- Metadata
-# MAGIC     CURRENT_TIMESTAMP()                  AS view_built_at
-# MAGIC 
-# MAGIC FROM active_pro_headers h
-# MAGIC INNER JOIN pro_lines l
-# MAGIC     ON h.pro_no = l.pro_no
-# MAGIC LEFT JOIN component_summary cs
-# MAGIC     ON l.pro_no = cs.pro_no AND l.line_no = cs.line_no
-# MAGIC LEFT JOIN so_enrichment soe
-# MAGIC     ON COALESCE(l.line_so_no, h.header_so_no) = soe.so_no
-# MAGIC    AND COALESCE(l.line_so_line_no, h.header_so_line_no) = soe.so_line_no
-# MAGIC LEFT JOIN engine_plan_keys ek
-# MAGIC     ON ek.item_no = l.item_no
-# MAGIC    AND COALESCE(ek.source_so_no, '') = COALESCE(l.line_so_no, h.header_so_no, '');
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 3: Validation — overall stats (PATCHED) ==============
-# MAGIC -- Expected: overdue_lines should now be > 0 (was 0 in v1 due to BC sentinel bug)
-# MAGIC 
-# MAGIC SELECT
-# MAGIC     COUNT(*)                                                  AS total_pro_lines,
-# MAGIC     COUNT(DISTINCT pro_no)                                    AS unique_pros,
-# MAGIC     COUNT(DISTINCT line_item_no)                              AS unique_items,
-# MAGIC     COUNT(DISTINCT source_so_no)                              AS linked_so_count,
-# MAGIC     SUM(CASE WHEN source_so_no IS NOT NULL THEN 1 ELSE 0 END) AS lines_with_so,
-# MAGIC     SUM(CASE WHEN is_overdue THEN 1 ELSE 0 END)               AS overdue_lines,
-# MAGIC     SUM(CASE WHEN is_dnd = TRUE THEN 1 ELSE 0 END)            AS dnd_lines,
-# MAGIC     SUM(CASE WHEN has_engine_recommendation THEN 1 ELSE 0 END) AS lines_with_engine_overlap,
-# MAGIC     SUM(CASE WHEN is_finished_via_completion THEN 1 ELSE 0 END) AS physically_complete_lines,
-# MAGIC     ROUND(SUM(line_cost_amount), 2)                           AS total_cost_amount,
-# MAGIC     ROUND(SUM(so_line_amount_thb), 2)                         AS total_revenue_linked
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 4: PRO type × status × planning_level distribution ==============
-# MAGIC 
-# MAGIC SELECT
-# MAGIC     pro_type,
-# MAGIC     pro_status,
-# MAGIC     planning_level_label,
-# MAGIC     COUNT(*) AS line_count,
-# MAGIC     COUNT(DISTINCT pro_no) AS unique_pros,
-# MAGIC     SUM(CASE WHEN is_overdue THEN 1 ELSE 0 END) AS overdue,
-# MAGIC     SUM(CASE WHEN is_dnd THEN 1 ELSE 0 END) AS dnd_count,
-# MAGIC     SUM(CASE WHEN has_engine_recommendation THEN 1 ELSE 0 END) AS engine_overlap,
-# MAGIC     ROUND(AVG(pct_complete), 1) AS avg_pct_complete,
-# MAGIC     ROUND(SUM(line_cost_amount), 2) AS total_cost
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
-# MAGIC GROUP BY pro_type, pro_status, planning_level_label
-# MAGIC ORDER BY pro_type, pro_status, planning_level_label;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 5: Top 30 overdue active PROs (PATCHED) ==============
-# MAGIC -- Expected: should now return rows (was empty in v1)
-# MAGIC 
-# MAGIC SELECT
-# MAGIC     pro_no,
-# MAGIC     pro_status,
-# MAGIC     pro_type,
-# MAGIC     planning_level_label,
-# MAGIC     customer_tier,
-# MAGIC     is_dnd,
-# MAGIC     source_so_no,
-# MAGIC     line_item_no,
-# MAGIC     line_description,
-# MAGIC     line_qty,
-# MAGIC     line_finished_qty,
-# MAGIC     pct_complete,
-# MAGIC     line_due_date,
-# MAGIC     days_until_due,
-# MAGIC     days_overdue,
-# MAGIC     component_count,
-# MAGIC     rfid_code,
-# MAGIC     has_engine_recommendation
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
-# MAGIC WHERE is_overdue = TRUE
-# MAGIC   AND pro_status IN ('Released', 'Firm Planned')
-# MAGIC ORDER BY
-# MAGIC     is_dnd DESC NULLS LAST,
-# MAGIC     days_overdue DESC NULLS LAST,
-# MAGIC     pct_complete ASC
-# MAGIC LIMIT 30;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 6: SO linkage coverage (UNCHANGED — was already correct) ==============
-# MAGIC 
-# MAGIC SELECT
-# MAGIC     pro_type,
-# MAGIC     COUNT(*) AS total_lines,
-# MAGIC     SUM(CASE WHEN source_so_no IS NOT NULL THEN 1 ELSE 0 END) AS with_so,
-# MAGIC     SUM(CASE WHEN customer_no IS NOT NULL THEN 1 ELSE 0 END) AS with_customer,
-# MAGIC     ROUND(100.0 * SUM(CASE WHEN source_so_no IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_with_so
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
-# MAGIC GROUP BY pro_type
-# MAGIC ORDER BY total_lines DESC;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 7: Engine plans vs Active PROs cross-check (REWRITTEN v2) ==============
-# MAGIC -- v1 problem: 1 plan ↔ many PRO lines (FG+SEMI+WAX) caused fan-out → ratios > 100%
-# MAGIC -- v2 fix: dedup BOTH sides to (archetype, plan_status, item_no, source_so_no) grain
-# MAGIC -- before joining, so ratios are bounded 0-100% and comparable.
-# MAGIC 
-# MAGIC WITH plans_unique AS (
-# MAGIC     SELECT DISTINCT
-# MAGIC         archetype,
-# MAGIC         plan_status,
-# MAGIC         item_no,
-# MAGIC         COALESCE(source_so_no, '') AS source_so_no_key,
-# MAGIC         plan_id
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
-# MAGIC     WHERE plan_status NOT IN ('COVERED_BY_STOCK', 'NO_TRIGGER')
-# MAGIC       AND plan_status NOT LIKE 'BLOCKED%'
-# MAGIC ),
-# MAGIC -- Dedup PRO Dependency to one row per (item, SO) — this matches plan grain
-# MAGIC pros_unique AS (
-# MAGIC     SELECT DISTINCT
-# MAGIC         line_item_no                          AS item_no,
-# MAGIC         COALESCE(source_so_no, '')            AS source_so_no_key,
-# MAGIC         pro_no
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
-# MAGIC )
-# MAGIC SELECT
-# MAGIC     p.archetype,
-# MAGIC     p.plan_status,
-# MAGIC     COUNT(DISTINCT p.plan_id)               AS planned_orders,
-# MAGIC     COUNT(DISTINCT pr.pro_no)               AS distinct_matching_pros,
-# MAGIC     -- "Plan keys" (item+SO combos) covered by at least one active PRO
-# MAGIC     COUNT(DISTINCT CASE WHEN pr.pro_no IS NOT NULL
-# MAGIC                         THEN CONCAT(p.item_no, '||', p.source_so_no_key) END) AS plan_keys_with_pro,
-# MAGIC     COUNT(DISTINCT CONCAT(p.item_no, '||', p.source_so_no_key)) AS plan_keys_total,
-# MAGIC     ROUND(
-# MAGIC         100.0 * COUNT(DISTINCT CASE WHEN pr.pro_no IS NOT NULL
-# MAGIC                                     THEN CONCAT(p.item_no, '||', p.source_so_no_key) END)
-# MAGIC               / NULLIF(COUNT(DISTINCT CONCAT(p.item_no, '||', p.source_so_no_key)), 0)
-# MAGIC     , 1)                                     AS pct_plan_keys_covered_by_pro
-# MAGIC FROM plans_unique p
-# MAGIC LEFT JOIN pros_unique pr
-# MAGIC     ON pr.item_no = p.item_no
-# MAGIC    AND pr.source_so_no_key = p.source_so_no_key
-# MAGIC GROUP BY p.archetype, p.plan_status
-# MAGIC ORDER BY planned_orders DESC;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============== CELL 8 [NEW]: Engine "true new" actionability summary ==============
-# MAGIC -- For HTML report — answers "of N engine plans, how many are TRUE NEW vs duplicating
-# MAGIC -- an in-flight PRO?" — clean number to put in KPI cards.
-# MAGIC 
-# MAGIC WITH plans_dedup AS (
-# MAGIC     SELECT DISTINCT
-# MAGIC         archetype,
-# MAGIC         plan_status,
-# MAGIC         item_no,
-# MAGIC         COALESCE(source_so_no, '') AS so_key,
-# MAGIC         plan_id
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
-# MAGIC ),
-# MAGIC pro_keys AS (
-# MAGIC     SELECT DISTINCT
-# MAGIC         line_item_no AS item_no,
-# MAGIC         COALESCE(source_so_no, '') AS so_key
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
-# MAGIC )
-# MAGIC SELECT
-# MAGIC     p.archetype,
-# MAGIC     COUNT(DISTINCT p.plan_id)                                    AS total_plans,
-# MAGIC     COUNT(DISTINCT CASE WHEN pk.item_no IS NULL
-# MAGIC                         THEN p.plan_id END)                       AS true_new_plans,
-# MAGIC     COUNT(DISTINCT CASE WHEN pk.item_no IS NOT NULL
-# MAGIC                         THEN p.plan_id END)                       AS plans_with_existing_pro,
-# MAGIC     ROUND(
-# MAGIC         100.0 * COUNT(DISTINCT CASE WHEN pk.item_no IS NULL
-# MAGIC                                     THEN p.plan_id END)
-# MAGIC               / NULLIF(COUNT(DISTINCT p.plan_id), 0)
-# MAGIC     , 1)                                                          AS pct_true_new
-# MAGIC FROM plans_dedup p
-# MAGIC LEFT JOIN pro_keys pk
-# MAGIC     ON pk.item_no = p.item_no
-# MAGIC    AND pk.so_key  = p.so_key
-# MAGIC GROUP BY p.archetype
-# MAGIC ORDER BY total_plans DESC;
-
-# METADATA ********************
-
-# META {
-# META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-#  # nb_gold_view_material_availability  (Phase 5 — View 6 of 7)
+#  # nb_gold_view_material_availability  (Phase 5 — View 1 of 7)
 
 # CELL ********************
 
@@ -6649,7 +5908,1250 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 
 # MARKDOWN ********************
 
-# # nb_gold_view_traceability_chain   (Phase 5 — View 7 of 7)
+# # DQ Report Export Queries v2 — Phase 4 Step 3
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC -- =====================================================================
+# MAGIC -- DQ Report Export Queries v3 — Phase 4 Step 3
+# MAGIC -- 4 Sheets (Master Data sheet dropped — to be requested separately from MD team)
+# MAGIC -- 
+# MAGIC -- Workflow:
+# MAGIC --   1. Run each query in Fabric Spark SQL notebook
+# MAGIC --   2. Export each result → CSV with names:
+# MAGIC --        sheet1_critical_late.csv
+# MAGIC --        sheet2_procurement.csv
+# MAGIC --        sheet3_engineering.csv
+# MAGIC --        sheet4_summary.csv
+# MAGIC --   3. Send all 4 CSVs to Claude → will generate DQ_Report.xlsx
+# MAGIC -- 
+# MAGIC -- Audience for each sheet:
+# MAGIC --   Sheet 1 (Critical Late):     Production Manager
+# MAGIC --   Sheet 2 (Procurement):       Procurement Lead
+# MAGIC --   Sheet 3 (Engineering):       Engineering Manager
+# MAGIC --   Sheet 4 (Summary):           Leadership / DPA
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== Common settings (run before each query) ==============
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = CORRECTED;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
+# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = CORRECTED;
+# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = CORRECTED;
+# MAGIC 
+# MAGIC 
+# MAGIC -- =====================================================================
+# MAGIC -- SHEET 1: Critical Late Items  (For Production Manager)
+# MAGIC -- Expected rows: ~1,761 (525 + 986 + 29 + 221)
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     plan_status               AS `Plan Status`,
+# MAGIC     archetype                 AS `Archetype`,
+# MAGIC     customer_tier             AS `Customer Tier`,
+# MAGIC     is_dnd                    AS `DND`,
+# MAGIC     source_so_no              AS `Source SO`,
+# MAGIC     item_no                   AS `Item No`,
+# MAGIC     description               AS `Description`,
+# MAGIC     item_category             AS `Category`,
+# MAGIC     demand_qty                AS `Demand Qty`,
+# MAGIC     onhand_available_qty      AS `On Hand`,
+# MAGIC     shortage_qty              AS `Shortage`,
+# MAGIC     planned_qty               AS `Planned Qty`,
+# MAGIC     need_by_date              AS `Need By Date`,
+# MAGIC     suggested_order_date      AS `Should Have Started`,
+# MAGIC     days_past_suggested_order AS `Days Late (Order)`,
+# MAGIC     days_past_need_by         AS `Days Past Need-By`
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
+# MAGIC WHERE escalation_level <= 4
+# MAGIC   AND escalation_level > 0
+# MAGIC ORDER BY 
+# MAGIC     escalation_level,
+# MAGIC     days_past_need_by DESC NULLS LAST,
+# MAGIC     days_past_suggested_order DESC NULLS LAST,
+# MAGIC     customer_tier;
+# MAGIC 
+# MAGIC 
+# MAGIC -- =====================================================================
+# MAGIC -- SHEET 2: Procurement Issues  (For Procurement Lead)
+# MAGIC -- Expected rows: ~1,020 (658 + 62 + 300)
+# MAGIC -- 
+# MAGIC -- Filter: BLOCKED_NO_VENDOR, BLOCKED_NO_LEAD_TIME, BLOCKED_NO_ROP_PARAMS
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     archetype                 AS `Archetype`,
+# MAGIC     plan_status               AS `Issue Type`,
+# MAGIC     item_no                   AS `Item No`,
+# MAGIC     description               AS `Description`,
+# MAGIC     item_category             AS `Category`,
+# MAGIC     demand_qty                AS `Demand Qty`,
+# MAGIC     onhand_available_qty      AS `On Hand`,
+# MAGIC     customer_tier             AS `Top Customer Tier`,
+# MAGIC     source_so_no              AS `Sample SO No`,
+# MAGIC     need_by_date              AS `Need By Date`,
+# MAGIC     exception_reason          AS `What's Missing`
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
+# MAGIC WHERE plan_status IN ('BLOCKED_NO_VENDOR', 'BLOCKED_NO_LEAD_TIME', 'BLOCKED_NO_ROP_PARAMS')
+# MAGIC ORDER BY 
+# MAGIC     plan_status,
+# MAGIC     archetype,
+# MAGIC     demand_qty DESC NULLS LAST;
+# MAGIC 
+# MAGIC 
+# MAGIC -- =====================================================================
+# MAGIC -- SHEET 3: Engineering Issues  (For Engineering Manager)
+# MAGIC -- Expected rows: ~25 (BLOCKED_BOM_NOT_CERTIFIED)
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     plan_status               AS `Issue Type`,
+# MAGIC     customer_tier             AS `Customer`,
+# MAGIC     is_dnd                    AS `DND`,
+# MAGIC     source_so_no              AS `Source SO`,
+# MAGIC     item_no                   AS `Item No`,
+# MAGIC     description               AS `Description`,
+# MAGIC     demand_qty                AS `Demand Qty`,
+# MAGIC     need_by_date              AS `Need By Date`,
+# MAGIC     days_past_suggested_order AS `Days Late`,
+# MAGIC     exception_reason          AS `Issue Detail`
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
+# MAGIC WHERE plan_status IN ('BLOCKED_BOM_NOT_CERTIFIED', 'BLOCKED_NO_BOM')
+# MAGIC ORDER BY 
+# MAGIC     is_dnd DESC NULLS LAST,
+# MAGIC     customer_tier,
+# MAGIC     days_past_suggested_order DESC NULLS LAST,
+# MAGIC     item_no;
+# MAGIC 
+# MAGIC 
+# MAGIC -- =====================================================================
+# MAGIC -- SHEET 4: Executive Summary  (For Leadership)
+# MAGIC -- 8 rows — 1 per status category
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC WITH stats AS (
+# MAGIC     SELECT 
+# MAGIC         plan_status,
+# MAGIC         COUNT(*) AS plan_count,
+# MAGIC         SUM(planned_qty) AS total_qty,
+# MAGIC         COUNT(DISTINCT item_no) AS unique_items,
+# MAGIC         COUNT(DISTINCT source_so_no) AS unique_so
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
+# MAGIC     WHERE plan_status IN (
+# MAGIC         'CRITICAL_LATE_DND', 'CRITICAL_LATE',
+# MAGIC         'OVERDUE_PROPOSED_DND', 'OVERDUE_PROPOSED',
+# MAGIC         'BLOCKED_NO_VENDOR', 'BLOCKED_NO_LEAD_TIME',
+# MAGIC         'BLOCKED_NO_ROP_PARAMS', 'BLOCKED_BOM_NOT_CERTIFIED'
+# MAGIC     )
+# MAGIC     GROUP BY plan_status
+# MAGIC )
+# MAGIC SELECT 
+# MAGIC     CASE 
+# MAGIC         WHEN plan_status = 'CRITICAL_LATE_DND' THEN 1
+# MAGIC         WHEN plan_status = 'CRITICAL_LATE' THEN 2
+# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED_DND' THEN 3
+# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED' THEN 4
+# MAGIC         WHEN plan_status = 'BLOCKED_NO_VENDOR' THEN 5
+# MAGIC         WHEN plan_status = 'BLOCKED_NO_LEAD_TIME' THEN 6
+# MAGIC         WHEN plan_status = 'BLOCKED_NO_ROP_PARAMS' THEN 7
+# MAGIC         WHEN plan_status = 'BLOCKED_BOM_NOT_CERTIFIED' THEN 8
+# MAGIC     END                       AS `Priority`,
+# MAGIC     plan_status               AS `Status`,
+# MAGIC     CASE 
+# MAGIC         WHEN plan_status LIKE 'CRITICAL%' OR plan_status LIKE 'OVERDUE%' THEN 'Production'
+# MAGIC         WHEN plan_status IN ('BLOCKED_NO_VENDOR', 'BLOCKED_NO_LEAD_TIME') THEN 'Procurement'
+# MAGIC         WHEN plan_status = 'BLOCKED_NO_ROP_PARAMS' THEN 'Master Data'
+# MAGIC         WHEN plan_status = 'BLOCKED_BOM_NOT_CERTIFIED' THEN 'Engineering'
+# MAGIC     END                       AS `Owner Team`,
+# MAGIC     CASE plan_status
+# MAGIC         WHEN 'CRITICAL_LATE_DND' THEN 'Items late + DND customer'
+# MAGIC         WHEN 'CRITICAL_LATE' THEN 'Items late, not DND'
+# MAGIC         WHEN 'OVERDUE_PROPOSED_DND' THEN 'Order start passed + DND'
+# MAGIC         WHEN 'OVERDUE_PROPOSED' THEN 'Order start passed'
+# MAGIC         WHEN 'BLOCKED_NO_VENDOR' THEN 'No vendor on Item card'
+# MAGIC         WHEN 'BLOCKED_NO_LEAD_TIME' THEN 'No Lead Time set'
+# MAGIC         WHEN 'BLOCKED_NO_ROP_PARAMS' THEN 'ROP item missing reorder params'
+# MAGIC         WHEN 'BLOCKED_BOM_NOT_CERTIFIED' THEN 'BOM exists but not Certified'
+# MAGIC     END                       AS `Description`,
+# MAGIC     plan_count                AS `Count`,
+# MAGIC     unique_items              AS `Unique Items`,
+# MAGIC     unique_so                 AS `Unique SO`,
+# MAGIC     ROUND(total_qty, 2)       AS `Total Qty`
+# MAGIC FROM stats
+# MAGIC ORDER BY `Priority`;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# MARKDOWN ********************
+
+# # nb_gold_view_planned_orders   (Phase 5 — View 2 of 7)
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC -- =====================================================================
+# MAGIC -- Notebook: nb_gold_view_planned_orders   (Phase 5 — View 1 of 7)
+# MAGIC -- Layer:    Gold MRP Engine — Public API Layer
+# MAGIC -- Output:   Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
+# MAGIC -- 
+# MAGIC -- Purpose:
+# MAGIC --   Master list ของ planned orders พร้อม:
+# MAGIC --     - Denormalized vendor info
+# MAGIC --     - Estimated cost (unit + total)
+# MAGIC --     - Priority aggregation
+# MAGIC --     - Revenue impact
+# MAGIC --     - Source SO traceability
+# MAGIC -- 
+# MAGIC -- Consumer: HTML Report, Power BI, Power Automate write-back
+# MAGIC -- Refresh:  Every MRP run
+# MAGIC -- 
+# MAGIC -- Adapted from spec (some fields simplified for pragmatic build):
+# MAGIC --   - planning_run_id: use unified_at as proxy (until orchestration in Phase 6)
+# MAGIC --   - parent_chain, casting_inputs: TBD (need PRO data — defer to View 5)
+# MAGIC --   - karat, color: derived from item_category + item_no pattern
+# MAGIC --   - scheduling_mode: BACKWARD if order_date >= today, FORWARD if late
+# MAGIC --   - schedule_warning: structured JSON for late items
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 1: Setup ==============
+# MAGIC 
+# MAGIC CREATE SCHEMA IF NOT EXISTS Gold_Inventory_Lakehouse.mrp;
+# MAGIC 
+# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = CORRECTED;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
+# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = CORRECTED;
+# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = CORRECTED;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 2: Build gold_MRP_Planned_Orders ==============
+# MAGIC 
+# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
+# MAGIC USING DELTA
+# MAGIC AS
+# MAGIC WITH 
+# MAGIC -- Determine order_type per archetype
+# MAGIC plans_with_type AS (
+# MAGIC     SELECT 
+# MAGIC         u.*,
+# MAGIC         CASE 
+# MAGIC             WHEN u.archetype IN ('ALLOY', 'MPS') THEN 'PRODUCTION'
+# MAGIC             WHEN u.archetype = 'MST_DIRECT' THEN 'PRODUCTION'
+# MAGIC             WHEN u.archetype IN ('L4L', 'ROP', 'ORDER') THEN 'PURCHASE'
+# MAGIC             ELSE 'OTHER'
+# MAGIC         END AS order_type,
+# MAGIC         
+# MAGIC         -- Scheduling mode
+# MAGIC         CASE 
+# MAGIC             WHEN u.suggested_order_date IS NULL THEN 'UNKNOWN'
+# MAGIC             WHEN u.suggested_order_date <= DATE'1900-01-01' THEN 'UNKNOWN'
+# MAGIC             WHEN u.suggested_order_date >= CURRENT_DATE() THEN 'BACKWARD'
+# MAGIC             ELSE 'FORWARD'
+# MAGIC         END AS scheduling_mode,
+# MAGIC         
+# MAGIC         -- Delay days (0 if backward, positive if forward)
+# MAGIC         CASE 
+# MAGIC             WHEN u.suggested_order_date IS NULL THEN 0
+# MAGIC             WHEN u.suggested_order_date <= DATE'1900-01-01' THEN 0
+# MAGIC             WHEN u.suggested_order_date < CURRENT_DATE() 
+# MAGIC                 THEN DATEDIFF(CURRENT_DATE(), u.suggested_order_date)
+# MAGIC             ELSE 0
+# MAGIC         END AS delay_days
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified u
+# MAGIC ),
+# MAGIC 
+# MAGIC -- Item master enrichment for denormalized fields
+# MAGIC item_enrichment AS (
+# MAGIC     SELECT 
+# MAGIC         item_no,
+# MAGIC         description AS im_description,
+# MAGIC         item_category AS im_category,
+# MAGIC         base_uom AS uom,
+# MAGIC         unit_cost,
+# MAGIC         vendor_no AS im_vendor_no,
+# MAGIC         scrap_pct,
+# MAGIC         CASE 
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%14KY%' THEN '14KY'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%14KR%' THEN '14KR'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%14KW%' THEN '14KW'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%18KY%' THEN '18KY'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%18KR%' THEN '18KR'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%18KW%' THEN '18KW'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%9KY%' THEN '9KY'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%9KR%' THEN '9KR'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%9KW%' THEN '9KW'
+# MAGIC             WHEN item_category = 'CASTING' AND item_no LIKE '%SLV%' THEN 'Silver925'
+# MAGIC             ELSE NULL
+# MAGIC         END AS karat,
+# MAGIC         CASE 
+# MAGIC             WHEN item_no LIKE '%KY%' OR item_no LIKE '%-Y%' THEN 'Yellow'
+# MAGIC             WHEN item_no LIKE '%KR%' OR item_no LIKE '%-R%' THEN 'Rose'
+# MAGIC             WHEN item_no LIKE '%KW%' OR item_no LIKE '%SLV%' THEN 'White'
+# MAGIC             ELSE NULL
+# MAGIC         END AS color
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master
+# MAGIC ),
+# MAGIC 
+# MAGIC -- Vendor info from BC (use BC vendor mirror if exists, else fallback)
+# MAGIC -- Note: backtick required for `No.` (BC dot-notation)
+# MAGIC -- If Vendor table not yet mirrored, this returns NULL safely
+# MAGIC vendor_lookup AS (
+# MAGIC     SELECT 
+# MAGIC         `No.` AS vendor_no,
+# MAGIC         Name AS vendor_name
+# MAGIC     FROM Silver_BC_Lakehouse.bc.Vendor
+# MAGIC     WHERE `BC Company` = 'Ennovie'
+# MAGIC ),
+# MAGIC 
+# MAGIC -- SO link aggregation (revenue + so list per plan)
+# MAGIC so_aggregation AS (
+# MAGIC     SELECT 
+# MAGIC         u.plan_id,
+# MAGIC         COUNT(DISTINCT u.source_so_no) AS affected_so_count,
+# MAGIC         COLLECT_LIST(DISTINCT u.source_so_no) AS affected_so_list,
+# MAGIC         -- For now, use linked SO line_amount as revenue proxy
+# MAGIC         -- (will be refined in Phase 5 cross-SO module)
+# MAGIC         SUM(COALESCE(so.line_amount_thb, 0)) AS total_revenue_impacted
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified u
+# MAGIC     LEFT JOIN Gold_Inventory_Lakehouse.mrp.gold_SO so 
+# MAGIC         ON u.source_so_no = so.so_no 
+# MAGIC         AND u.item_no = so.item_no
+# MAGIC         AND so.is_open = TRUE
+# MAGIC     GROUP BY u.plan_id
+# MAGIC )
+# MAGIC 
+# MAGIC -- Final SELECT with all denormalized fields
+# MAGIC SELECT 
+# MAGIC     -- Run identification (placeholder until Phase 6 orchestration)
+# MAGIC     DATE_FORMAT(p.unified_at, 'yyyyMMdd_HHmm') AS planning_run_id,
+# MAGIC     p.plan_id AS planned_order_id,
+# MAGIC     
+# MAGIC     -- Order classification
+# MAGIC     p.order_type,
+# MAGIC     p.archetype,
+# MAGIC     
+# MAGIC     -- Item info (denormalized)
+# MAGIC     p.item_no,
+# MAGIC     COALESCE(im.im_description, p.description)  AS item_description,
+# MAGIC     COALESCE(im.im_category, p.item_category)   AS item_category,
+# MAGIC     im.uom,
+# MAGIC     im.karat,
+# MAGIC     im.color,
+# MAGIC     
+# MAGIC     -- Quantities
+# MAGIC     p.demand_qty,
+# MAGIC     p.onhand_available_qty,
+# MAGIC     p.shortage_qty,
+# MAGIC     p.planned_qty AS qty,
+# MAGIC     
+# MAGIC     -- Dates & scheduling
+# MAGIC     p.suggested_order_date AS release_date,
+# MAGIC     p.need_by_date AS due_date,
+# MAGIC     p.scheduling_mode,
+# MAGIC     p.need_by_date AS original_due_date,
+# MAGIC     p.delay_days,
+# MAGIC     
+# MAGIC     -- Schedule warning (structured JSON for FORWARD mode)
+# MAGIC     CASE 
+# MAGIC         WHEN p.scheduling_mode = 'FORWARD' THEN 
+# MAGIC             CONCAT(
+# MAGIC                 '{"reason":"lead_time_insufficient",',
+# MAGIC                 '"delay_days":', CAST(p.delay_days AS STRING), ',',
+# MAGIC                 '"cs_action_required":', 
+# MAGIC                 CASE WHEN p.delay_days > 7 THEN 'true' ELSE 'false' END,
+# MAGIC                 ',"plan_status":"', p.plan_status, '"}'
+# MAGIC             )
+# MAGIC         ELSE NULL
+# MAGIC     END AS schedule_warning,
+# MAGIC     
+# MAGIC     -- Vendor info (denormalized from BC)
+# MAGIC     im.im_vendor_no AS vendor_no,
+# MAGIC     v.vendor_name,
+# MAGIC     
+# MAGIC     -- Cost info (estimated from Item Master)
+# MAGIC     COALESCE(im.unit_cost, 0) AS estimated_unit_cost,
+# MAGIC     ROUND(p.planned_qty * COALESCE(im.unit_cost, 0), 4) AS estimated_total_cost,
+# MAGIC     
+# MAGIC     -- Priority info
+# MAGIC     p.priority_weight AS priority_score,
+# MAGIC     p.is_dnd,
+# MAGIC     p.customer_tier,
+# MAGIC     
+# MAGIC     -- Affected SOs aggregation
+# MAGIC     p.source_so_no AS primary_source_so,
+# MAGIC     COALESCE(soa.affected_so_count, 1) AS affected_so_count,
+# MAGIC     COALESCE(soa.affected_so_list, ARRAY(p.source_so_no)) AS affected_so_list,
+# MAGIC     COALESCE(soa.total_revenue_impacted, 0) AS total_revenue_impacted,
+# MAGIC     
+# MAGIC     -- Plan status & escalation
+# MAGIC     p.plan_status,
+# MAGIC     p.original_plan_status,
+# MAGIC     p.escalation_level,
+# MAGIC     p.exception_reason,
+# MAGIC     
+# MAGIC     -- Days metrics (intelligence layer)
+# MAGIC     p.days_past_suggested_order,
+# MAGIC     p.days_until_need_by,
+# MAGIC     p.days_past_need_by,
+# MAGIC     
+# MAGIC     -- Tracking flags
+# MAGIC     p.is_order_date_overdue,
+# MAGIC     p.is_need_date_overdue,
+# MAGIC     
+# MAGIC     -- Metadata
+# MAGIC     p.unified_at AS created_at,
+# MAGIC     CURRENT_TIMESTAMP() AS view_built_at
+# MAGIC     
+# MAGIC FROM plans_with_type p
+# MAGIC LEFT JOIN item_enrichment im ON p.item_no = im.item_no
+# MAGIC LEFT JOIN vendor_lookup v ON im.im_vendor_no = v.vendor_no
+# MAGIC LEFT JOIN so_aggregation soa ON p.plan_id = soa.plan_id;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 3: Validation — row count + column check ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     COUNT(*) AS total_planned_orders,
+# MAGIC     COUNT(DISTINCT planning_run_id) AS run_count,
+# MAGIC     COUNT(DISTINCT archetype) AS archetype_count,
+# MAGIC     COUNT(DISTINCT item_no) AS unique_items,
+# MAGIC     SUM(CASE WHEN scheduling_mode = 'BACKWARD' THEN 1 ELSE 0 END) AS backward_count,
+# MAGIC     SUM(CASE WHEN scheduling_mode = 'FORWARD' THEN 1 ELSE 0 END) AS forward_count,
+# MAGIC     SUM(CASE WHEN vendor_name IS NOT NULL THEN 1 ELSE 0 END) AS with_vendor_name,
+# MAGIC     SUM(CASE WHEN estimated_unit_cost > 0 THEN 1 ELSE 0 END) AS with_cost,
+# MAGIC     ROUND(SUM(estimated_total_cost), 2) AS total_estimated_cost,
+# MAGIC     ROUND(SUM(total_revenue_impacted), 2) AS total_revenue_impacted
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 4: Order type breakdown ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     order_type,
+# MAGIC     archetype,
+# MAGIC     COUNT(*) AS plan_count,
+# MAGIC     COUNT(DISTINCT item_no) AS unique_items,
+# MAGIC     SUM(CASE WHEN scheduling_mode = 'FORWARD' THEN 1 ELSE 0 END) AS forward_count,
+# MAGIC     ROUND(AVG(delay_days), 1) AS avg_delay,
+# MAGIC     ROUND(SUM(qty), 2) AS total_qty,
+# MAGIC     ROUND(SUM(estimated_total_cost), 2) AS total_cost,
+# MAGIC     ROUND(SUM(total_revenue_impacted), 2) AS total_revenue
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
+# MAGIC GROUP BY order_type, archetype
+# MAGIC ORDER BY order_type, archetype;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 5: Forward scheduling — CS-facing query ==============
+# MAGIC -- Items ที่ลีดไทม์ไม่ทันแล้ว — CS ต้องแจ้งลูกค้า
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     planning_run_id,
+# MAGIC     archetype,
+# MAGIC     customer_tier,
+# MAGIC     is_dnd,
+# MAGIC     primary_source_so,
+# MAGIC     item_no,
+# MAGIC     item_description,
+# MAGIC     qty,
+# MAGIC     original_due_date,
+# MAGIC     delay_days,
+# MAGIC     plan_status,
+# MAGIC     schedule_warning,
+# MAGIC     affected_so_count,
+# MAGIC     ROUND(total_revenue_impacted, 2) AS revenue_impacted_thb,
+# MAGIC     ROUND(estimated_total_cost, 2) AS estimated_cost
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
+# MAGIC WHERE scheduling_mode = 'FORWARD'
+# MAGIC   AND delay_days > 0
+# MAGIC ORDER BY 
+# MAGIC     is_dnd DESC NULLS LAST,
+# MAGIC     delay_days DESC,
+# MAGIC     total_revenue_impacted DESC NULLS LAST
+# MAGIC LIMIT 30;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 6: Vendor coverage check ==============
+# MAGIC -- ดูว่า PURCHASE archetypes มี vendor info ครบหรือไม่
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     archetype,
+# MAGIC     COUNT(*) AS total_plans,
+# MAGIC     SUM(CASE WHEN vendor_no IS NOT NULL THEN 1 ELSE 0 END) AS with_vendor_no,
+# MAGIC     SUM(CASE WHEN vendor_name IS NOT NULL THEN 1 ELSE 0 END) AS with_vendor_name,
+# MAGIC     ROUND(100.0 * SUM(CASE WHEN vendor_name IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_with_name
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
+# MAGIC WHERE order_type = 'PURCHASE'
+# MAGIC GROUP BY archetype
+# MAGIC ORDER BY archetype;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 7: Cost coverage check ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     archetype,
+# MAGIC     COUNT(*) AS total_plans,
+# MAGIC     SUM(CASE WHEN estimated_unit_cost > 0 THEN 1 ELSE 0 END) AS with_cost,
+# MAGIC     ROUND(100.0 * SUM(CASE WHEN estimated_unit_cost > 0 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_with_cost,
+# MAGIC     ROUND(SUM(estimated_total_cost), 2) AS total_cost_thb,
+# MAGIC     ROUND(AVG(estimated_unit_cost), 2) AS avg_unit_cost
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
+# MAGIC GROUP BY archetype
+# MAGIC ORDER BY total_cost_thb DESC NULLS LAST;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# MARKDOWN ********************
+
+# # nb_gold_view_actions   (Phase 5 — View 3 of 7)
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC -- =====================================================================
+# MAGIC -- Notebook: nb_gold_view_actions   (Phase 5 — View 2 of 7)
+# MAGIC -- Layer:    Gold MRP Engine — Public API Layer
+# MAGIC -- Output:   Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
+# MAGIC -- 
+# MAGIC -- Purpose:
+# MAGIC --   Action messages พร้อม severity, recommended_action, dampener
+# MAGIC --   Derived from plan_status + escalation_level + days_past_*
+# MAGIC -- 
+# MAGIC -- Consumer: Claude AI agent, Teams alerts, Power Automate notifications
+# MAGIC -- Refresh:  Every MRP run
+# MAGIC -- 
+# MAGIC -- Logic:
+# MAGIC --   - Action types: EXPEDITE, EXPEDITE_DND, CREATE, CREATE_URGENT, REVIEW_BOM, FIX_DATA
+# MAGIC --   - Severity: critical, high, medium, low (from escalation_level)
+# MAGIC --   - Dampener: skip if days_off < 3 days (avoid alert fatigue)
+# MAGIC --   - Status: pending (not yet acted on)
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 1: Setup ==============
+# MAGIC 
+# MAGIC CREATE SCHEMA IF NOT EXISTS Gold_Inventory_Lakehouse.mrp;
+# MAGIC 
+# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = CORRECTED;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
+# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = CORRECTED;
+# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = CORRECTED;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 2: Build gold_MRP_Actions ==============
+# MAGIC 
+# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
+# MAGIC USING DELTA
+# MAGIC AS
+# MAGIC WITH 
+# MAGIC -- Source: actionable plans (exclude COVERED_BY_STOCK and NO_TRIGGER)
+# MAGIC actionable_plans AS (
+# MAGIC     SELECT *
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Planned_Orders
+# MAGIC     WHERE plan_status NOT IN ('COVERED_BY_STOCK', 'NO_TRIGGER')
+# MAGIC       AND escalation_level <= 6
+# MAGIC )
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     -- Identity
+# MAGIC     UUID()                  AS action_id,
+# MAGIC     planning_run_id,
+# MAGIC     planned_order_id,
+# MAGIC     
+# MAGIC     -- Action classification
+# MAGIC     CASE 
+# MAGIC         WHEN plan_status = 'CRITICAL_LATE_DND'        THEN 'EXPEDITE_DND'
+# MAGIC         WHEN plan_status = 'CRITICAL_LATE'            THEN 'EXPEDITE'
+# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED_DND'     THEN 'CREATE_URGENT_DND'
+# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED'         THEN 'CREATE_URGENT'
+# MAGIC         WHEN plan_status LIKE 'BLOCKED_NO_VENDOR%'    THEN 'FIX_VENDOR'
+# MAGIC         WHEN plan_status LIKE 'BLOCKED_NO_LEAD%'      THEN 'FIX_LEAD_TIME'
+# MAGIC         WHEN plan_status LIKE 'BLOCKED_NO_ROP%'       THEN 'FIX_ROP_PARAMS'
+# MAGIC         WHEN plan_status LIKE 'BLOCKED_BOM%'          THEN 'CERTIFY_BOM'
+# MAGIC         WHEN plan_status = 'PROPOSED_DND'             THEN 'CREATE_DND'
+# MAGIC         WHEN plan_status = 'PROPOSED'                 THEN 'CREATE'
+# MAGIC         ELSE 'REVIEW'
+# MAGIC     END AS action_type,
+# MAGIC     
+# MAGIC     -- Severity (4 levels)
+# MAGIC     CASE 
+# MAGIC         WHEN escalation_level = 1 THEN 'critical'  -- CRITICAL_LATE_DND
+# MAGIC         WHEN escalation_level = 2 THEN 'high'      -- CRITICAL_LATE
+# MAGIC         WHEN escalation_level = 3 THEN 'high'      -- OVERDUE_DND
+# MAGIC         WHEN escalation_level = 4 THEN 'medium'    -- OVERDUE
+# MAGIC         WHEN escalation_level = 5 THEN 'medium'    -- PROPOSED_DND
+# MAGIC         WHEN escalation_level = 6 THEN 'low'       -- PROPOSED
+# MAGIC         WHEN escalation_level = 0 THEN 'high'      -- BLOCKED (data issue)
+# MAGIC         ELSE 'low'
+# MAGIC     END AS severity,
+# MAGIC     
+# MAGIC     -- Owner team (who needs to act)
+# MAGIC     CASE 
+# MAGIC         WHEN plan_status LIKE 'CRITICAL%' OR plan_status LIKE 'OVERDUE%' THEN 'Production'
+# MAGIC         WHEN plan_status IN ('BLOCKED_NO_VENDOR', 'BLOCKED_NO_LEAD_TIME') THEN 'Procurement'
+# MAGIC         WHEN plan_status = 'BLOCKED_NO_ROP_PARAMS' THEN 'Master Data'
+# MAGIC         WHEN plan_status = 'BLOCKED_BOM_NOT_CERTIFIED' THEN 'Engineering'
+# MAGIC         WHEN plan_status LIKE 'PROPOSED%' AND order_type = 'PURCHASE' THEN 'Procurement'
+# MAGIC         WHEN plan_status LIKE 'PROPOSED%' AND order_type = 'PRODUCTION' THEN 'Production'
+# MAGIC         ELSE 'Planning'
+# MAGIC     END AS owner_team,
+# MAGIC     
+# MAGIC     -- Item/order info (denormalized)
+# MAGIC     item_no,
+# MAGIC     item_description,
+# MAGIC     archetype,
+# MAGIC     qty AS shortfall_qty,
+# MAGIC     
+# MAGIC     -- Date info
+# MAGIC     release_date AS target_release_date,
+# MAGIC     due_date AS target_due_date,
+# MAGIC     delay_days AS days_off,
+# MAGIC     
+# MAGIC     -- Dampener logic (avoid alert fatigue)
+# MAGIC     -- Dampener applied if: small delay AND not DND AND not critical
+# MAGIC     CASE 
+# MAGIC         WHEN delay_days < 3 AND is_dnd = FALSE 
+# MAGIC             AND plan_status NOT IN ('CRITICAL_LATE_DND', 'CRITICAL_LATE')
+# MAGIC             THEN TRUE
+# MAGIC         ELSE FALSE
+# MAGIC     END AS dampener_applied,
+# MAGIC     
+# MAGIC     CASE 
+# MAGIC         WHEN delay_days < 3 AND is_dnd = FALSE 
+# MAGIC             AND plan_status NOT IN ('CRITICAL_LATE_DND', 'CRITICAL_LATE')
+# MAGIC             THEN 'minor_delay_below_threshold'
+# MAGIC         ELSE NULL
+# MAGIC     END AS dampener_reason,
+# MAGIC     
+# MAGIC     -- Customer/SO context
+# MAGIC     primary_source_so,
+# MAGIC     customer_tier,
+# MAGIC     is_dnd,
+# MAGIC     affected_so_count,
+# MAGIC     affected_so_list,
+# MAGIC     total_revenue_impacted AS revenue_at_risk,
+# MAGIC     
+# MAGIC     -- Recommended action (human-readable)
+# MAGIC     CASE 
+# MAGIC         WHEN plan_status = 'CRITICAL_LATE_DND' THEN 
+# MAGIC             CONCAT('🚨 EXPEDITE NOW — DND customer ', COALESCE(customer_tier, ''), 
+# MAGIC                 ', ', CAST(delay_days AS STRING), ' days late, ', 
+# MAGIC                 CAST(affected_so_count AS STRING), ' SO(s) affected. Contact customer + supplier immediately.')
+# MAGIC         WHEN plan_status = 'CRITICAL_LATE' THEN 
+# MAGIC             CONCAT('🚨 EXPEDITE — ', CAST(delay_days AS STRING), ' days late, item: ', item_no)
+# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED_DND' THEN 
+# MAGIC             CONCAT('⚡ CREATE PO/PRO URGENTLY — DND ', COALESCE(customer_tier, ''), 
+# MAGIC                 ', should have ordered ', CAST(delay_days AS STRING), ' days ago.')
+# MAGIC         WHEN plan_status = 'OVERDUE_PROPOSED' THEN 
+# MAGIC             CONCAT('⚠️ CREATE PO/PRO — overdue by ', CAST(delay_days AS STRING), ' days.')
+# MAGIC         WHEN plan_status = 'BLOCKED_NO_VENDOR' THEN 
+# MAGIC             CONCAT('❌ Procurement: Set vendor on Item card for ', item_no, ' (qty ', CAST(qty AS STRING), ')')
+# MAGIC         WHEN plan_status = 'BLOCKED_NO_LEAD_TIME' THEN 
+# MAGIC             CONCAT('❌ Procurement: Set Lead Time Calculation on Item ', item_no)
+# MAGIC         WHEN plan_status = 'BLOCKED_NO_ROP_PARAMS' THEN 
+# MAGIC             CONCAT('❌ Master Data: Set Reorder Point/Quantity for ', item_no)
+# MAGIC         WHEN plan_status = 'BLOCKED_BOM_NOT_CERTIFIED' THEN 
+# MAGIC             CONCAT('❌ Engineering: Certify BOM for FG ', item_no, 
+# MAGIC                 ' (customer: ', COALESCE(customer_tier, 'unknown'), ')')
+# MAGIC         WHEN plan_status = 'PROPOSED_DND' THEN 
+# MAGIC             CONCAT('🟡 Create ', 
+# MAGIC                 CASE WHEN order_type = 'PURCHASE' THEN 'PO' ELSE 'Production Order' END,
+# MAGIC                 ' — DND customer, on time')
+# MAGIC         WHEN plan_status = 'PROPOSED' THEN 
+# MAGIC             CONCAT('🟢 Routine: Create ',
+# MAGIC                 CASE WHEN order_type = 'PURCHASE' THEN 'PO' ELSE 'Production Order' END)
+# MAGIC         ELSE 'Review plan status'
+# MAGIC     END AS recommended_action,
+# MAGIC     
+# MAGIC     -- Plan status reference
+# MAGIC     plan_status,
+# MAGIC     escalation_level,
+# MAGIC     exception_reason,
+# MAGIC     
+# MAGIC     -- Status (initial state)
+# MAGIC     'pending' AS status,
+# MAGIC     
+# MAGIC     -- Decision log placeholder (Phase 6 will populate)
+# MAGIC     CAST(NULL AS STRING) AS decision_log,
+# MAGIC     
+# MAGIC     -- Metadata
+# MAGIC     CURRENT_TIMESTAMP() AS created_at
+# MAGIC     
+# MAGIC FROM actionable_plans;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 3: Validation — overall stats ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     COUNT(*) AS total_actions,
+# MAGIC     SUM(CASE WHEN dampener_applied THEN 1 ELSE 0 END) AS dampened,
+# MAGIC     SUM(CASE WHEN NOT dampener_applied THEN 1 ELSE 0 END) AS active_alerts,
+# MAGIC     COUNT(DISTINCT owner_team) AS owner_teams,
+# MAGIC     COUNT(DISTINCT action_type) AS action_types,
+# MAGIC     ROUND(SUM(revenue_at_risk), 2) AS total_revenue_at_risk
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 4: Severity × Owner Team distribution ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     severity,
+# MAGIC     owner_team,
+# MAGIC     COUNT(*) AS action_count,
+# MAGIC     SUM(CASE WHEN dampener_applied THEN 1 ELSE 0 END) AS dampened,
+# MAGIC     SUM(CASE WHEN NOT dampener_applied THEN 1 ELSE 0 END) AS active_alerts,
+# MAGIC     ROUND(SUM(revenue_at_risk), 2) AS revenue_at_risk
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
+# MAGIC GROUP BY severity, owner_team
+# MAGIC ORDER BY 
+# MAGIC     CASE severity 
+# MAGIC         WHEN 'critical' THEN 1 
+# MAGIC         WHEN 'high' THEN 2 
+# MAGIC         WHEN 'medium' THEN 3 
+# MAGIC         ELSE 4 
+# MAGIC     END,
+# MAGIC     action_count DESC;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 5: Action type breakdown ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     action_type,
+# MAGIC     severity,
+# MAGIC     owner_team,
+# MAGIC     COUNT(*) AS action_count,
+# MAGIC     ROUND(AVG(days_off), 1) AS avg_days_off,
+# MAGIC     SUM(CASE WHEN is_dnd THEN 1 ELSE 0 END) AS dnd_count
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
+# MAGIC GROUP BY action_type, severity, owner_team
+# MAGIC ORDER BY action_count DESC;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 6: Top 30 critical active alerts (no dampener) ==============
+# MAGIC 
+# MAGIC SELECT 
+# MAGIC     severity,
+# MAGIC     owner_team,
+# MAGIC     action_type,
+# MAGIC     customer_tier,
+# MAGIC     is_dnd,
+# MAGIC     primary_source_so,
+# MAGIC     item_no,
+# MAGIC     item_description,
+# MAGIC     shortfall_qty,
+# MAGIC     days_off,
+# MAGIC     affected_so_count,
+# MAGIC     ROUND(revenue_at_risk, 2) AS revenue_at_risk_thb,
+# MAGIC     recommended_action
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_MRP_Actions
+# MAGIC WHERE NOT dampener_applied
+# MAGIC   AND severity IN ('critical', 'high')
+# MAGIC ORDER BY 
+# MAGIC     CASE severity WHEN 'critical' THEN 1 ELSE 2 END,
+# MAGIC     revenue_at_risk DESC NULLS LAST,
+# MAGIC     days_off DESC NULLS LAST
+# MAGIC LIMIT 30;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# MARKDOWN ********************
+
+# # nb_gold_view_pro_dependency   (Phase 5 — View 4 of 7)
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC -- =====================================================================
+# MAGIC -- Notebook: nb_gold_view_pro_dependency  (Phase 5 — View 5 of 7) — v2 PATCHED
+# MAGIC -- Layer:    Gold MRP Engine — Public API Layer
+# MAGIC -- Output:   Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
+# MAGIC --
+# MAGIC -- ⚡ v2 CHANGES (Apr 26, 2026):
+# MAGIC --   [FIX 1] is_overdue: BC `Finished Date` is `0001-01-01` (not NULL) for active PROs.
+# MAGIC --           Use ` > DATE'1900-01-01'` check, not `IS NULL`.
+# MAGIC --   [FIX 2] Apply same fix to all date NULL handling: pro_finished_date,
+# MAGIC --           line_due_date, line_starting_date, line_ending_date, pro_due_date.
+# MAGIC --   [FIX 3] Add `is_finished_via_completion` flag (line_finished_qty >= line_qty)
+# MAGIC --           because Released PROs may be physically complete but not yet posted.
+# MAGIC --   [NEW]   Cell 7 rewritten with proper grain matching (item-level dedup)
+# MAGIC --           + new flag column `has_existing_pro` baked into the table itself,
+# MAGIC --           so HTML report can filter "true new" actions without a self-join.
+# MAGIC -- =====================================================================
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 1: Setup ==============
+# MAGIC 
+# MAGIC CREATE SCHEMA IF NOT EXISTS Gold_Inventory_Lakehouse.mrp;
+# MAGIC 
+# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = CORRECTED;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
+# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = CORRECTED;
+# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = CORRECTED;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 2: Build gold_PRO_Dependency (PATCHED) ==============
+# MAGIC 
+# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
+# MAGIC USING DELTA
+# MAGIC AS
+# MAGIC WITH
+# MAGIC -- BC NULL date sentinel = '0001-01-01'. Anything <= 1900-01-01 = effectively NULL.
+# MAGIC -- We pre-clean dates in the source CTEs so downstream logic becomes simple.
+# MAGIC 
+# MAGIC active_pro_headers AS (
+# MAGIC     SELECT
+# MAGIC         h.`No.`                          AS pro_no,
+# MAGIC         h.Status                         AS pro_status,
+# MAGIC         h.`Source No.`                   AS source_item_no,
+# MAGIC         h.Description                    AS pro_description,
+# MAGIC         h.`Source Type`                  AS source_type,
+# MAGIC         CASE WHEN h.`For Prod.Order No.` = '' THEN NULL ELSE h.`For Prod.Order No.` END AS parent_pro_no,
+# MAGIC         CASE WHEN h.`For Item` = '' THEN NULL ELSE h.`For Item` END AS for_item,
+# MAGIC         CASE WHEN h.`Sales Order No.` = '' THEN NULL ELSE h.`Sales Order No.` END AS header_so_no,
+# MAGIC         h.`Sales Order Line No.`         AS header_so_line_no,
+# MAGIC         -- Clean BC sentinel dates (0001-01-01) → NULL
+# MAGIC         CASE WHEN h.`Starting Date` > DATE'1900-01-01' THEN h.`Starting Date` END AS pro_starting_date,
+# MAGIC         CASE WHEN h.`Ending Date`   > DATE'1900-01-01' THEN h.`Ending Date`   END AS pro_ending_date,
+# MAGIC         CASE WHEN h.`Due Date`      > DATE'1900-01-01' THEN h.`Due Date`      END AS pro_due_date,
+# MAGIC         CASE WHEN h.`Finished Date` > DATE'1900-01-01' THEN h.`Finished Date` END AS pro_finished_date,
+# MAGIC         h.Quantity                       AS pro_qty,
+# MAGIC         h.`Unit Cost`                    AS pro_unit_cost,
+# MAGIC         h.`Cost Amount`                  AS pro_cost_amount,
+# MAGIC         h.`Location Code`                AS pro_location,
+# MAGIC         h.`Low-Level Code`               AS low_level_code,
+# MAGIC         h.`Replan Ref. Status`           AS replan_status,
+# MAGIC         h.`Ready to Finish Flag`         AS ready_to_finish,
+# MAGIC         h.`Cons vs Exp > Tol Flag`       AS consumption_variance_flag,
+# MAGIC         h.Blocked                        AS pro_blocked
+# MAGIC     FROM Silver_BC_Lakehouse.bc.`Production Order` h
+# MAGIC     WHERE h.`BC Company` = 'Ennovie'
+# MAGIC       AND h.Status IN ('Released', 'Firm Planned', 'Planned')
+# MAGIC ),
+# MAGIC 
+# MAGIC pro_lines AS (
+# MAGIC     SELECT
+# MAGIC         l.`Prod. Order No.`              AS pro_no,
+# MAGIC         l.`Line No.`                     AS line_no,
+# MAGIC         l.`Item No.`                     AS item_no,
+# MAGIC         l.Description                    AS line_description,
+# MAGIC         l.Quantity                       AS line_qty,
+# MAGIC         l.`Finished Quantity`            AS line_finished_qty,
+# MAGIC         l.`Remaining Quantity`           AS line_remaining_qty,
+# MAGIC         -- Clean BC sentinel dates
+# MAGIC         CASE WHEN l.`Due Date`      > DATE'1900-01-01' THEN l.`Due Date`      END AS line_due_date,
+# MAGIC         CASE WHEN l.`Starting Date` > DATE'1900-01-01' THEN l.`Starting Date` END AS line_starting_date,
+# MAGIC         CASE WHEN l.`Ending Date`   > DATE'1900-01-01' THEN l.`Ending Date`   END AS line_ending_date,
+# MAGIC         l.`Planning Level Code`          AS planning_level_code,
+# MAGIC         CASE l.`Planning Level Code`
+# MAGIC             WHEN 0 THEN 'FG'
+# MAGIC             WHEN 1 THEN 'SEMI'
+# MAGIC             WHEN 2 THEN 'WAX_WH'
+# MAGIC             ELSE CONCAT('LEVEL_', CAST(l.`Planning Level Code` AS STRING))
+# MAGIC         END                              AS planning_level_label,
+# MAGIC         CASE WHEN l.`Production BOM No.` = '' THEN NULL ELSE l.`Production BOM No.` END AS bom_no,
+# MAGIC         l.`Production BOM Version Code`  AS bom_version,
+# MAGIC         CASE WHEN l.`Routing No.` = '' THEN NULL ELSE l.`Routing No.` END AS routing_no,
+# MAGIC         CASE WHEN l.`Sales Order No.` = '' THEN NULL ELSE l.`Sales Order No.` END AS line_so_no,
+# MAGIC         l.`Sales Order Line No.`         AS line_so_line_no,
+# MAGIC         CASE WHEN l.`RFID Code` = '' THEN NULL ELSE l.`RFID Code` END AS rfid_code,
+# MAGIC         l.`Unit Cost`                    AS line_unit_cost,
+# MAGIC         l.`Cost Amount`                  AS line_cost_amount,
+# MAGIC         l.Priority                       AS line_priority,
+# MAGIC         l.`Location Code`                AS line_location,
+# MAGIC         l.`MPS Order`                    AS mps_order_flag
+# MAGIC     FROM Silver_BC_Lakehouse.bc.`Prod Order Line` l
+# MAGIC     WHERE l.`BC Company` = 'Ennovie'
+# MAGIC       AND l.Status IN ('Released', 'Firm Planned', 'Planned')
+# MAGIC ),
+# MAGIC 
+# MAGIC component_summary AS (
+# MAGIC     SELECT
+# MAGIC         c.`Prod. Order No.`              AS pro_no,
+# MAGIC         c.`Prod. Order Line No.`         AS line_no,
+# MAGIC         COUNT(*)                         AS component_count,
+# MAGIC         COUNT(DISTINCT c.`Item No.`)     AS unique_components,
+# MAGIC         SUM(c.Quantity)                  AS total_component_qty,
+# MAGIC         SUM(c.`Remaining Quantity`)      AS total_remaining_qty,
+# MAGIC         SUM(c.`Cost Amount`)             AS total_component_cost,
+# MAGIC         COLLECT_LIST(DISTINCT c.`Item No.`) AS component_items
+# MAGIC     FROM Silver_BC_Lakehouse.bc.`Prod Order Component` c
+# MAGIC     WHERE c.`BC Company` = 'Ennovie'
+# MAGIC       AND c.Status IN ('Released', 'Firm Planned', 'Planned')
+# MAGIC     GROUP BY c.`Prod. Order No.`, c.`Prod. Order Line No.`
+# MAGIC ),
+# MAGIC 
+# MAGIC so_enrichment AS (
+# MAGIC     SELECT DISTINCT
+# MAGIC         so.so_no,
+# MAGIC         so.so_line_no,
+# MAGIC         so.customer_no,
+# MAGIC         so.customer_name,
+# MAGIC         so.customer_tier_code,
+# MAGIC         so.is_dnd,
+# MAGIC         so.dnd_exceed_date,
+# MAGIC         so.ship_date         AS so_ship_date,
+# MAGIC         so.line_amount_thb   AS so_line_amount_thb
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_SO so
+# MAGIC     WHERE so.is_open = TRUE
+# MAGIC ),
+# MAGIC 
+# MAGIC -- [NEW v2] Build a set of (item_no, source_so_no) pairs that the engine
+# MAGIC -- has flagged as "needs new plan". We'll left-join this into the final
+# MAGIC -- view so each PRO line knows whether it overlaps an engine recommendation.
+# MAGIC engine_plan_keys AS (
+# MAGIC     SELECT DISTINCT
+# MAGIC         item_no,
+# MAGIC         source_so_no
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
+# MAGIC     WHERE plan_status NOT IN ('COVERED_BY_STOCK', 'NO_TRIGGER')
+# MAGIC       AND plan_status NOT LIKE 'BLOCKED%'
+# MAGIC )
+# MAGIC 
+# MAGIC -- =========================
+# MAGIC -- Final SELECT — denormalized PRO chain
+# MAGIC -- =========================
+# MAGIC SELECT
+# MAGIC     -- PRO identification
+# MAGIC     h.pro_no,
+# MAGIC     h.pro_status,
+# MAGIC     h.source_item_no,
+# MAGIC     h.pro_description,
+# MAGIC 
+# MAGIC     -- Line info
+# MAGIC     l.line_no,
+# MAGIC     l.item_no                            AS line_item_no,
+# MAGIC     l.line_description,
+# MAGIC     l.planning_level_code,
+# MAGIC     l.planning_level_label,
+# MAGIC 
+# MAGIC     -- BOM info
+# MAGIC     l.bom_no,
+# MAGIC     l.bom_version,
+# MAGIC     l.routing_no,
+# MAGIC 
+# MAGIC     -- Quantities
+# MAGIC     l.line_qty,
+# MAGIC     l.line_finished_qty,
+# MAGIC     l.line_remaining_qty,
+# MAGIC     ROUND(
+# MAGIC         CASE
+# MAGIC             WHEN l.line_qty > 0
+# MAGIC                 THEN 100.0 * l.line_finished_qty / l.line_qty
+# MAGIC             ELSE 0
+# MAGIC         END, 1
+# MAGIC     )                                    AS pct_complete,
+# MAGIC 
+# MAGIC     -- [FIX 3] Physical completion flag (qty produced ≥ qty planned)
+# MAGIC     CASE
+# MAGIC         WHEN l.line_qty > 0 AND l.line_finished_qty >= l.line_qty THEN TRUE
+# MAGIC         ELSE FALSE
+# MAGIC     END                                  AS is_finished_via_completion,
+# MAGIC 
+# MAGIC     -- Dates (cleaned)
+# MAGIC     l.line_starting_date,
+# MAGIC     l.line_ending_date,
+# MAGIC     l.line_due_date,
+# MAGIC     h.pro_finished_date,
+# MAGIC     h.pro_due_date,
+# MAGIC 
+# MAGIC     -- Days metrics
+# MAGIC     CASE
+# MAGIC         WHEN l.line_due_date IS NULL THEN NULL
+# MAGIC         ELSE DATEDIFF(l.line_due_date, CURRENT_DATE())
+# MAGIC     END                                  AS days_until_due,
+# MAGIC 
+# MAGIC     -- [FIX 1+2] is_overdue: line is overdue iff
+# MAGIC     --   1) line_due_date is real (not BC sentinel)
+# MAGIC     --   2) due date in the past
+# MAGIC     --   3) PRO not yet posted as finished (pro_finished_date IS NULL after cleaning)
+# MAGIC     --   4) line not yet physically complete
+# MAGIC     CASE
+# MAGIC         WHEN l.line_due_date IS NULL                          THEN FALSE  -- no real due date
+# MAGIC         WHEN l.line_due_date >= CURRENT_DATE()                THEN FALSE  -- not yet due
+# MAGIC         WHEN h.pro_finished_date IS NOT NULL                  THEN FALSE  -- already posted finished
+# MAGIC         WHEN l.line_qty > 0
+# MAGIC          AND l.line_finished_qty >= l.line_qty                THEN FALSE  -- physically complete
+# MAGIC         ELSE TRUE
+# MAGIC     END                                  AS is_overdue,
+# MAGIC 
+# MAGIC     -- Days overdue (positive number when late, NULL when not overdue)
+# MAGIC     CASE
+# MAGIC         WHEN l.line_due_date IS NULL                          THEN NULL
+# MAGIC         WHEN l.line_due_date >= CURRENT_DATE()                THEN NULL
+# MAGIC         WHEN h.pro_finished_date IS NOT NULL                  THEN NULL
+# MAGIC         WHEN l.line_qty > 0
+# MAGIC          AND l.line_finished_qty >= l.line_qty                THEN NULL
+# MAGIC         ELSE DATEDIFF(CURRENT_DATE(), l.line_due_date)
+# MAGIC     END                                  AS days_overdue,
+# MAGIC 
+# MAGIC     -- Cost
+# MAGIC     l.line_unit_cost,
+# MAGIC     l.line_cost_amount,
+# MAGIC 
+# MAGIC     -- Parent linkage
+# MAGIC     h.parent_pro_no,
+# MAGIC     h.for_item,
+# MAGIC 
+# MAGIC     -- SO linkage (line OR header)
+# MAGIC     COALESCE(l.line_so_no, h.header_so_no)              AS source_so_no,
+# MAGIC     COALESCE(l.line_so_line_no, h.header_so_line_no)    AS source_so_line_no,
+# MAGIC 
+# MAGIC     -- Customer info
+# MAGIC     soe.customer_no,
+# MAGIC     soe.customer_name,
+# MAGIC     soe.customer_tier_code               AS customer_tier,
+# MAGIC     soe.is_dnd,
+# MAGIC     soe.so_ship_date,
+# MAGIC     soe.so_line_amount_thb,
+# MAGIC 
+# MAGIC     -- Component summary
+# MAGIC     COALESCE(cs.component_count, 0)      AS component_count,
+# MAGIC     COALESCE(cs.unique_components, 0)    AS unique_components,
+# MAGIC     cs.total_component_qty,
+# MAGIC     cs.total_remaining_qty,
+# MAGIC     cs.total_component_cost,
+# MAGIC     cs.component_items,
+# MAGIC 
+# MAGIC     -- Status flags
+# MAGIC     l.mps_order_flag,
+# MAGIC     h.ready_to_finish,
+# MAGIC     h.consumption_variance_flag,
+# MAGIC     h.replan_status,
+# MAGIC     h.pro_blocked,
+# MAGIC     l.rfid_code,
+# MAGIC 
+# MAGIC     -- Location
+# MAGIC     l.line_location,
+# MAGIC 
+# MAGIC     -- Priority
+# MAGIC     l.line_priority,
+# MAGIC 
+# MAGIC     -- Type classification
+# MAGIC     CASE
+# MAGIC         WHEN h.pro_no LIKE 'CAS%'                       THEN 'CASTING'
+# MAGIC         WHEN h.pro_no LIKE 'WRO%'                       THEN 'FG_PRODUCTION'
+# MAGIC         WHEN h.pro_no LIKE 'WSEMI%' OR h.pro_no LIKE 'SEMI%' THEN 'SEMI'
+# MAGIC         WHEN l.planning_level_code = 0                  THEN 'FG_PRODUCTION'
+# MAGIC         WHEN l.planning_level_code = 1                  THEN 'SEMI'
+# MAGIC         WHEN l.planning_level_code = 2                  THEN 'WAX_WH'
+# MAGIC         ELSE 'OTHER'
+# MAGIC     END                                  AS pro_type,
+# MAGIC 
+# MAGIC     -- [NEW v2] Engine overlap flag — TRUE if MRP engine also wants this (item, SO)
+# MAGIC     CASE
+# MAGIC         WHEN ek.item_no IS NOT NULL THEN TRUE
+# MAGIC         ELSE FALSE
+# MAGIC     END                                  AS has_engine_recommendation,
+# MAGIC 
+# MAGIC     -- Metadata
+# MAGIC     CURRENT_TIMESTAMP()                  AS view_built_at
+# MAGIC 
+# MAGIC FROM active_pro_headers h
+# MAGIC INNER JOIN pro_lines l
+# MAGIC     ON h.pro_no = l.pro_no
+# MAGIC LEFT JOIN component_summary cs
+# MAGIC     ON l.pro_no = cs.pro_no AND l.line_no = cs.line_no
+# MAGIC LEFT JOIN so_enrichment soe
+# MAGIC     ON COALESCE(l.line_so_no, h.header_so_no) = soe.so_no
+# MAGIC    AND COALESCE(l.line_so_line_no, h.header_so_line_no) = soe.so_line_no
+# MAGIC LEFT JOIN engine_plan_keys ek
+# MAGIC     ON ek.item_no = l.item_no
+# MAGIC    AND COALESCE(ek.source_so_no, '') = COALESCE(l.line_so_no, h.header_so_no, '');
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 3: Validation — overall stats (PATCHED) ==============
+# MAGIC -- Expected: overdue_lines should now be > 0 (was 0 in v1 due to BC sentinel bug)
+# MAGIC 
+# MAGIC SELECT
+# MAGIC     COUNT(*)                                                  AS total_pro_lines,
+# MAGIC     COUNT(DISTINCT pro_no)                                    AS unique_pros,
+# MAGIC     COUNT(DISTINCT line_item_no)                              AS unique_items,
+# MAGIC     COUNT(DISTINCT source_so_no)                              AS linked_so_count,
+# MAGIC     SUM(CASE WHEN source_so_no IS NOT NULL THEN 1 ELSE 0 END) AS lines_with_so,
+# MAGIC     SUM(CASE WHEN is_overdue THEN 1 ELSE 0 END)               AS overdue_lines,
+# MAGIC     SUM(CASE WHEN is_dnd = TRUE THEN 1 ELSE 0 END)            AS dnd_lines,
+# MAGIC     SUM(CASE WHEN has_engine_recommendation THEN 1 ELSE 0 END) AS lines_with_engine_overlap,
+# MAGIC     SUM(CASE WHEN is_finished_via_completion THEN 1 ELSE 0 END) AS physically_complete_lines,
+# MAGIC     ROUND(SUM(line_cost_amount), 2)                           AS total_cost_amount,
+# MAGIC     ROUND(SUM(so_line_amount_thb), 2)                         AS total_revenue_linked
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 4: PRO type × status × planning_level distribution ==============
+# MAGIC 
+# MAGIC SELECT
+# MAGIC     pro_type,
+# MAGIC     pro_status,
+# MAGIC     planning_level_label,
+# MAGIC     COUNT(*) AS line_count,
+# MAGIC     COUNT(DISTINCT pro_no) AS unique_pros,
+# MAGIC     SUM(CASE WHEN is_overdue THEN 1 ELSE 0 END) AS overdue,
+# MAGIC     SUM(CASE WHEN is_dnd THEN 1 ELSE 0 END) AS dnd_count,
+# MAGIC     SUM(CASE WHEN has_engine_recommendation THEN 1 ELSE 0 END) AS engine_overlap,
+# MAGIC     ROUND(AVG(pct_complete), 1) AS avg_pct_complete,
+# MAGIC     ROUND(SUM(line_cost_amount), 2) AS total_cost
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
+# MAGIC GROUP BY pro_type, pro_status, planning_level_label
+# MAGIC ORDER BY pro_type, pro_status, planning_level_label;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 5: Top 30 overdue active PROs (PATCHED) ==============
+# MAGIC -- Expected: should now return rows (was empty in v1)
+# MAGIC 
+# MAGIC SELECT
+# MAGIC     pro_no,
+# MAGIC     pro_status,
+# MAGIC     pro_type,
+# MAGIC     planning_level_label,
+# MAGIC     customer_tier,
+# MAGIC     is_dnd,
+# MAGIC     source_so_no,
+# MAGIC     line_item_no,
+# MAGIC     line_description,
+# MAGIC     line_qty,
+# MAGIC     line_finished_qty,
+# MAGIC     pct_complete,
+# MAGIC     line_due_date,
+# MAGIC     days_until_due,
+# MAGIC     days_overdue,
+# MAGIC     component_count,
+# MAGIC     rfid_code,
+# MAGIC     has_engine_recommendation
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
+# MAGIC WHERE is_overdue = TRUE
+# MAGIC   AND pro_status IN ('Released', 'Firm Planned')
+# MAGIC ORDER BY
+# MAGIC     is_dnd DESC NULLS LAST,
+# MAGIC     days_overdue DESC NULLS LAST,
+# MAGIC     pct_complete ASC
+# MAGIC LIMIT 30;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 6: SO linkage coverage (UNCHANGED — was already correct) ==============
+# MAGIC 
+# MAGIC SELECT
+# MAGIC     pro_type,
+# MAGIC     COUNT(*) AS total_lines,
+# MAGIC     SUM(CASE WHEN source_so_no IS NOT NULL THEN 1 ELSE 0 END) AS with_so,
+# MAGIC     SUM(CASE WHEN customer_no IS NOT NULL THEN 1 ELSE 0 END) AS with_customer,
+# MAGIC     ROUND(100.0 * SUM(CASE WHEN source_so_no IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_with_so
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
+# MAGIC GROUP BY pro_type
+# MAGIC ORDER BY total_lines DESC;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 7: Engine plans vs Active PROs cross-check (REWRITTEN v2) ==============
+# MAGIC -- v1 problem: 1 plan ↔ many PRO lines (FG+SEMI+WAX) caused fan-out → ratios > 100%
+# MAGIC -- v2 fix: dedup BOTH sides to (archetype, plan_status, item_no, source_so_no) grain
+# MAGIC -- before joining, so ratios are bounded 0-100% and comparable.
+# MAGIC 
+# MAGIC WITH plans_unique AS (
+# MAGIC     SELECT DISTINCT
+# MAGIC         archetype,
+# MAGIC         plan_status,
+# MAGIC         item_no,
+# MAGIC         COALESCE(source_so_no, '') AS source_so_no_key,
+# MAGIC         plan_id
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
+# MAGIC     WHERE plan_status NOT IN ('COVERED_BY_STOCK', 'NO_TRIGGER')
+# MAGIC       AND plan_status NOT LIKE 'BLOCKED%'
+# MAGIC ),
+# MAGIC -- Dedup PRO Dependency to one row per (item, SO) — this matches plan grain
+# MAGIC pros_unique AS (
+# MAGIC     SELECT DISTINCT
+# MAGIC         line_item_no                          AS item_no,
+# MAGIC         COALESCE(source_so_no, '')            AS source_so_no_key,
+# MAGIC         pro_no
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
+# MAGIC )
+# MAGIC SELECT
+# MAGIC     p.archetype,
+# MAGIC     p.plan_status,
+# MAGIC     COUNT(DISTINCT p.plan_id)               AS planned_orders,
+# MAGIC     COUNT(DISTINCT pr.pro_no)               AS distinct_matching_pros,
+# MAGIC     -- "Plan keys" (item+SO combos) covered by at least one active PRO
+# MAGIC     COUNT(DISTINCT CASE WHEN pr.pro_no IS NOT NULL
+# MAGIC                         THEN CONCAT(p.item_no, '||', p.source_so_no_key) END) AS plan_keys_with_pro,
+# MAGIC     COUNT(DISTINCT CONCAT(p.item_no, '||', p.source_so_no_key)) AS plan_keys_total,
+# MAGIC     ROUND(
+# MAGIC         100.0 * COUNT(DISTINCT CASE WHEN pr.pro_no IS NOT NULL
+# MAGIC                                     THEN CONCAT(p.item_no, '||', p.source_so_no_key) END)
+# MAGIC               / NULLIF(COUNT(DISTINCT CONCAT(p.item_no, '||', p.source_so_no_key)), 0)
+# MAGIC     , 1)                                     AS pct_plan_keys_covered_by_pro
+# MAGIC FROM plans_unique p
+# MAGIC LEFT JOIN pros_unique pr
+# MAGIC     ON pr.item_no = p.item_no
+# MAGIC    AND pr.source_so_no_key = p.source_so_no_key
+# MAGIC GROUP BY p.archetype, p.plan_status
+# MAGIC ORDER BY planned_orders DESC;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============== CELL 8 [NEW]: Engine "true new" actionability summary ==============
+# MAGIC -- For HTML report — answers "of N engine plans, how many are TRUE NEW vs duplicating
+# MAGIC -- an in-flight PRO?" — clean number to put in KPI cards.
+# MAGIC 
+# MAGIC WITH plans_dedup AS (
+# MAGIC     SELECT DISTINCT
+# MAGIC         archetype,
+# MAGIC         plan_status,
+# MAGIC         item_no,
+# MAGIC         COALESCE(source_so_no, '') AS so_key,
+# MAGIC         plan_id
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_planned_orders_unified
+# MAGIC ),
+# MAGIC pro_keys AS (
+# MAGIC     SELECT DISTINCT
+# MAGIC         line_item_no AS item_no,
+# MAGIC         COALESCE(source_so_no, '') AS so_key
+# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_PRO_Dependency
+# MAGIC )
+# MAGIC SELECT
+# MAGIC     p.archetype,
+# MAGIC     COUNT(DISTINCT p.plan_id)                                    AS total_plans,
+# MAGIC     COUNT(DISTINCT CASE WHEN pk.item_no IS NULL
+# MAGIC                         THEN p.plan_id END)                       AS true_new_plans,
+# MAGIC     COUNT(DISTINCT CASE WHEN pk.item_no IS NOT NULL
+# MAGIC                         THEN p.plan_id END)                       AS plans_with_existing_pro,
+# MAGIC     ROUND(
+# MAGIC         100.0 * COUNT(DISTINCT CASE WHEN pk.item_no IS NULL
+# MAGIC                                     THEN p.plan_id END)
+# MAGIC               / NULLIF(COUNT(DISTINCT p.plan_id), 0)
+# MAGIC     , 1)                                                          AS pct_true_new
+# MAGIC FROM plans_dedup p
+# MAGIC LEFT JOIN pro_keys pk
+# MAGIC     ON pk.item_no = p.item_no
+# MAGIC    AND pk.so_key  = p.so_key
+# MAGIC GROUP BY p.archetype
+# MAGIC ORDER BY total_plans DESC;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# MARKDOWN ********************
+
+# # nb_gold_view_traceability_chain   (Phase 5 — View 5 of 7)
 
 # CELL ********************
 
@@ -7276,1345 +7778,44 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 
 # MARKDOWN ********************
 
-# # Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
+# # fabric_requisition_line v9.4.24
 
 # CELL ********************
 
 # MAGIC %%sql
-# MAGIC -- ============================================================================
-# MAGIC -- nb_gold_pur_summary · SINGLE-CELL VERSION (v9.4.9 compatible)
-# MAGIC -- ============================================================================
-# MAGIC -- Paste entire content into ONE Spark notebook cell, then "Run cell"
-# MAGIC -- 
-# MAGIC -- What it does (in order):
-# MAGIC --   1. Build gold_pur_item_summary  (~1,518 rows, item-level)
-# MAGIC --   2. Build gold_pur_bucket_detail (~2,842 rows, bucket-level + flags)
-# MAGIC --   3. Update v_pur_item_summary view to point to new table
-# MAGIC --   4. Verify with FCB-000591-BR
-# MAGIC --
-# MAGIC -- Date: 2026-05-05 (updated for v9.4.9)
-# MAGIC -- Source: fabric_requisition_line v9.4.9
-# MAGIC -- 
-# MAGIC -- v9.4.9 ADDITIONS (4 UI enrichment cols carried through to Gold tables):
-# MAGIC --   - best_stock_location
-# MAGIC --   - replenishment_system  
-# MAGIC --   - item_total_demand_uom1
-# MAGIC --   - item_total_firmed_demand_uom2
-# MAGIC -- ============================================================================
-# MAGIC 
-# MAGIC -- Environment
-# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead  = CORRECTED;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============================================================================
-# MAGIC -- TABLE A · gold_pur_item_summary (item-level)
-# MAGIC -- ============================================================================
-# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
-# MAGIC USING DELTA
-# MAGIC TBLPROPERTIES (
-# MAGIC   'delta.autoOptimize.optimizeWrite' = 'false',
-# MAGIC   'description' = 'PUR-facing item summary, materialized from fabric_requisition_line v9.4.6 with v9.4.7 policy-aware aggregation. 1 row per item.'
-# MAGIC )
-# MAGIC AS
-# MAGIC WITH item_rows AS (
-# MAGIC   SELECT *
-# MAGIC   FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC   WHERE should_trigger = TRUE
-# MAGIC     AND final_uom1 > 0
-# MAGIC ),
-# MAGIC ranked AS (
-# MAGIC   SELECT
-# MAGIC     item_rows.*,
-# MAGIC     ROW_NUMBER() OVER (
-# MAGIC       PARTITION BY item_no
-# MAGIC       ORDER BY bucket_start_date ASC
-# MAGIC     ) AS bucket_rank,
-# MAGIC     FIRST_VALUE(final_uom1) OVER (
-# MAGIC       PARTITION BY item_no
-# MAGIC       ORDER BY bucket_start_date ASC
-# MAGIC       ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-# MAGIC     ) AS earliest_bucket_final_uom1,
-# MAGIC     FIRST_VALUE(final_uom2) OVER (
-# MAGIC       PARTITION BY item_no
-# MAGIC       ORDER BY bucket_start_date ASC
-# MAGIC       ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-# MAGIC     ) AS earliest_bucket_final_uom2,
-# MAGIC     FIRST_VALUE(suggested_qty_if_open_released) OVER (
-# MAGIC       PARTITION BY item_no
-# MAGIC       ORDER BY bucket_start_date ASC
-# MAGIC       ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-# MAGIC     ) AS earliest_bucket_qty_if_open_released
-# MAGIC   FROM item_rows
-# MAGIC )
-# MAGIC SELECT
-# MAGIC   -- Identity
-# MAGIC   item_no,
-# MAGIC   MAX(description)              AS description,
-# MAGIC   MAX(item_category_code)       AS item_category_code,
-# MAGIC   MAX(item_uom2_code)           AS item_uom2_code,
-# MAGIC   MAX(base_uom_uom1)            AS base_uom_uom1,
-# MAGIC   MAX(module)                   AS module,
-# MAGIC   MAX(archetype)                AS archetype,
-# MAGIC   MAX(reordering_policy)        AS reordering_policy,
-# MAGIC   MAX(vendor_no)                AS vendor_no,
-# MAGIC   MAX(vendor_name)              AS vendor_name,
-# MAGIC   
-# MAGIC   -- Bucket window
-# MAGIC   MIN(bucket_week)              AS earliest_bucket,
-# MAGIC   MAX(bucket_week)              AS latest_bucket,
-# MAGIC   CONCAT(MIN(bucket_week), ' → ', MAX(bucket_week)) AS bucket_window_display,
-# MAGIC   COUNT(*)                      AS bucket_count,
-# MAGIC   
-# MAGIC   -- Demand (always SUM)
-# MAGIC   SUM(demand_quantity_uom1_bucket) AS qty_uom1,
-# MAGIC   SUM(firmed_bom_qty_uom2)         AS qty_uom2,
-# MAGIC   
-# MAGIC   -- Stock state (item-level)
-# MAGIC   MAX(onhand_quantity_uom1)        AS onhand_uom1,
-# MAGIC   MAX(onhand_quantity_uom2)        AS onhand_uom2,
-# MAGIC   MAX(available_qty_atp_uom1)      AS available_atp_uom1,
-# MAGIC   MAX(available_qty_atp_uom2)      AS available_atp_uom2,
-# MAGIC   MAX(incoming_po_released_qty)    AS incoming_released_uom1,
-# MAGIC   MAX(incoming_po_open_qty)        AS incoming_open_uom1,
-# MAGIC   MAX(incoming_po_released_qty_uom2) AS incoming_released_uom2,
-# MAGIC   MAX(incoming_po_open_qty_uom2)   AS incoming_open_uom2,
-# MAGIC   CONCAT('R: ', ROUND(MAX(incoming_po_released_qty), 2), 
-# MAGIC          ' | O: ', ROUND(MAX(incoming_po_open_qty), 2)) AS incoming_uom1_display,
-# MAGIC   CONCAT('R: ', ROUND(MAX(incoming_po_released_qty_uom2), 2), 
-# MAGIC          ' | O: ', ROUND(MAX(incoming_po_open_qty_uom2), 2)) AS incoming_uom2_display,
-# MAGIC   MIN(earliest_po_receipt_date)    AS po_receipt_date,
-# MAGIC   MAX(CASE WHEN has_pending_open_po THEN 1 ELSE 0 END) = 1 AS has_pending_open_po,
-# MAGIC   
-# MAGIC   -- Suggested order qty · POLICY-AWARE ★ THE FIX ★
-# MAGIC   CASE 
-# MAGIC     WHEN MAX(reordering_policy) IN ('Fixed Reorder Qty.', 'Maximum Qty.') 
-# MAGIC       THEN MAX(earliest_bucket_final_uom1)
-# MAGIC     ELSE 
-# MAGIC       SUM(final_uom1)
-# MAGIC   END AS final_uom1,
-# MAGIC   
-# MAGIC   CASE 
-# MAGIC     WHEN MAX(reordering_policy) IN ('Fixed Reorder Qty.', 'Maximum Qty.') 
-# MAGIC       THEN MAX(earliest_bucket_final_uom2)
-# MAGIC     ELSE 
-# MAGIC       SUM(final_uom2)
-# MAGIC   END AS final_uom2,
-# MAGIC   
-# MAGIC   CASE 
-# MAGIC     WHEN MAX(reordering_policy) IN ('Fixed Reorder Qty.', 'Maximum Qty.') 
-# MAGIC       THEN MAX(earliest_bucket_qty_if_open_released)
-# MAGIC     ELSE 
-# MAGIC       SUM(suggested_qty_if_open_released)
-# MAGIC   END AS suggested_qty_if_open_released,
-# MAGIC   
-# MAGIC   CONCAT(MAX(base_uom_uom1), ' / ', MAX(item_uom2_code)) AS uoms_display,
-# MAGIC   
-# MAGIC   -- Alerts
-# MAGIC   MAX(alert_flag)                  AS alert_flag,
-# MAGIC   MAX(CASE alert_flag
-# MAGIC         WHEN 'CRITICAL' THEN 5 WHEN 'HIGH' THEN 4
-# MAGIC         WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 2
-# MAGIC         WHEN 'INFO' THEN 1 ELSE 0
-# MAGIC       END)                         AS alert_severity,
-# MAGIC   MIN(projected_stockout_date)     AS projected_stockout_date,
-# MAGIC   MIN(suggested_order_date_actionable) AS order_due_date,
-# MAGIC   MAX(CASE po_urgency
-# MAGIC         WHEN 'OVERDUE' THEN 5 WHEN 'URGENT' THEN 4
-# MAGIC         WHEN 'HIGH' THEN 3 WHEN 'NORMAL' THEN 2
-# MAGIC         WHEN 'LOW' THEN 1 ELSE 0
-# MAGIC       END)                         AS po_urgency_severity,
-# MAGIC   
-# MAGIC   -- Cost · POLICY-AWARE
-# MAGIC   MAX(unit_cost)                   AS unit_cost,
-# MAGIC   MAX(unit_cost_source)            AS unit_cost_source,
-# MAGIC   CASE 
-# MAGIC     WHEN MAX(reordering_policy) IN ('Fixed Reorder Qty.', 'Maximum Qty.') 
-# MAGIC       THEN MAX(earliest_bucket_final_uom1) * MAX(unit_cost)
-# MAGIC     ELSE 
-# MAGIC       SUM(cost_amount)
-# MAGIC   END AS est_cost,
-# MAGIC   
-# MAGIC   -- Forecast
-# MAGIC   MAX(forecast_demand_60d)         AS forecast_demand_60d,
-# MAGIC   MAX(avg_daily_usage)             AS avg_daily_usage,
-# MAGIC   
-# MAGIC   -- Metadata
-# MAGIC   MAX(customer_no)                 AS customer_no,
-# MAGIC   MAX(CASE WHEN is_dnd THEN 1 ELSE 0 END) = 1 AS is_dnd,
-# MAGIC   MAX(CASE WHEN is_critical THEN 1 ELSE 0 END) = 1 AS is_critical,
-# MAGIC   MAX(priority_score)              AS priority_score,
-# MAGIC   
-# MAGIC   -- ⭐ v9.4.9: UI enrichment cols (carry through from engine)
-# MAGIC   MAX(best_stock_location)         AS best_stock_location,
-# MAGIC   MAX(replenishment_system)        AS replenishment_system,
-# MAGIC   MAX(item_total_demand_uom1)      AS item_total_demand_uom1,
-# MAGIC   MAX(item_total_firmed_demand_uom2) AS item_total_firmed_demand_uom2,
-# MAGIC   
-# MAGIC   MAX(source_version)              AS source_version,
-# MAGIC   current_timestamp()              AS materialized_at
-# MAGIC FROM ranked
-# MAGIC GROUP BY item_no;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============================================================================
-# MAGIC -- TABLE B · gold_pur_bucket_detail (bucket-level + dedup helpers)
-# MAGIC -- ============================================================================
-# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_pur_bucket_detail
-# MAGIC USING DELTA
-# MAGIC TBLPROPERTIES (
-# MAGIC   'delta.autoOptimize.optimizeWrite' = 'false',
-# MAGIC   'description' = 'PUR per-bucket detail with dedup helpers. Use is_earliest_bucket=TRUE for ROP items to avoid double-counting in SUM.'
-# MAGIC )
-# MAGIC AS
-# MAGIC SELECT
-# MAGIC   f.*,
-# MAGIC   CASE WHEN ROW_NUMBER() OVER (
-# MAGIC       PARTITION BY f.item_no 
-# MAGIC       ORDER BY f.bucket_start_date ASC
-# MAGIC   ) = 1 THEN TRUE ELSE FALSE END AS is_earliest_bucket,
-# MAGIC   CASE 
-# MAGIC       WHEN f.reordering_policy IN ('Fixed Reorder Qty.', 'Maximum Qty.')
-# MAGIC         THEN 'POLICY_DRIVEN'
-# MAGIC       ELSE 'DEMAND_DRIVEN'
-# MAGIC   END AS dedup_class,
-# MAGIC   current_timestamp() AS materialized_at
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line f
-# MAGIC WHERE f.should_trigger = TRUE 
-# MAGIC   AND f.final_uom1 > 0;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============================================================================
-# MAGIC -- VIEW · point v_pur_item_summary to new table (backward compat)
-# MAGIC -- ============================================================================
-# MAGIC CREATE OR REPLACE VIEW Gold_Inventory_Lakehouse.mrp.v_pur_item_summary AS
-# MAGIC SELECT *
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============================================================================
-# MAGIC -- VERIFY · canary FCB-000591-BR + row counts (last query, returns to user)
-# MAGIC -- ============================================================================
-# MAGIC SELECT
-# MAGIC     '✅ DEPLOYED v9.4.9' AS status,
-# MAGIC     (SELECT COUNT(*) FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary) AS item_summary_rows,
-# MAGIC     (SELECT COUNT(*) FROM Gold_Inventory_Lakehouse.mrp.gold_pur_bucket_detail) AS bucket_detail_rows,
-# MAGIC     (SELECT final_uom1 FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
-# MAGIC      WHERE item_no = 'FCB-000591-BR') AS canary_final_uom1,
-# MAGIC     (SELECT best_stock_location FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
-# MAGIC      WHERE item_no = 'FCB-000591-BR') AS canary_location,
-# MAGIC     (SELECT replenishment_system FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
-# MAGIC      WHERE item_no = 'FCB-000591-BR') AS canary_repl,
-# MAGIC     (SELECT item_total_demand_uom1 FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
-# MAGIC      WHERE item_no = 'FCB-000591-BR') AS canary_total_demand,
-# MAGIC     CASE WHEN (SELECT final_uom1 FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
-# MAGIC                WHERE item_no = 'FCB-000591-BR') = 8000
-# MAGIC          THEN '✅ canary OK'
-# MAGIC          ELSE '❌ canary FAIL'
-# MAGIC     END AS canary_check;
-
-# METADATA ********************
-
-# META {
-# META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# # fabric_requisition_line v9.4.19
-
-# CELL ********************
-
-# MAGIC %%sql
-# MAGIC 
 # MAGIC -- =====================================================================
-# MAGIC -- 📦 fabric_requisition_line v9.4.19 — Cell 2 (FULL NOTEBOOK)
+# MAGIC -- 📦 fabric_requisition_line v9.4.24 — Cell 2 (FULL NOTEBOOK)
 # MAGIC -- =====================================================================
 # MAGIC -- Run AFTER Cell 1 (UDFs registered)
 # MAGIC --
-# MAGIC -- 🆕 v9.4.19 CHANGES (from v9.4.18):
+# MAGIC -- 🆕 v9.4.24 CHANGES (from v9.4.23):
 # MAGIC --
-# MAGIC --   🔧 ENGINE FIX: Disable ROP-only refill
-# MAGIC --      
-# MAGIC --      RATIONALE:
-# MAGIC --        Phloy's intent (since v9.4.16): "demand-driven only — no policy refill"
-# MAGIC --        However v9.4.16/17/18 still kept ROP refill branch in Fixed Reorder
-# MAGIC --        Qty. policy, which triggered orders for items with on_hand <= ROP
-# MAGIC --        regardless of FIRMED demand.
-# MAGIC --      
-# MAGIC --      EVIDENCE:
-# MAGIC --        GE-PL-001780 (Pearls · Fixed Reorder Qty. policy):
-# MAGIC --          - firmed_bom_qty = 0 (no FIRMED demand)
-# MAGIC --          - on_hand = 1, ROP > 1
-# MAGIC --          - v9.4.18: should_trigger = TRUE, final_uom1 = 17 (ROP refill)
-# MAGIC --          - v9.4.19: should_trigger = FALSE, final_uom1 = 0
-# MAGIC --        
-# MAGIC --        Demand source displayed as POLICY_TRIGGERED with UUID PRO ref —
-# MAGIC --        not a real BC PRO, confusing for Purchasing team.
-# MAGIC --      
-# MAGIC --      FIX:
-# MAGIC --        Layer 5 v6_with_lot_sizing — remove ROP-refill OR branch:
-# MAGIC --        
-# MAGIC --        BEFORE (v9.4.18):
-# MAGIC --          WHEN reordering_policy = 'Fixed Reorder Qty.' THEN
-# MAGIC --              (onhand_quantity_uom1 <= COALESCE(reorder_point_uom1, 0) AND bucket_rank = 1)
-# MAGIC --              OR shortage_quantity_uom1 > 0
-# MAGIC --        
-# MAGIC --        AFTER (v9.4.19):
-# MAGIC --          WHEN reordering_policy = 'Fixed Reorder Qty.' THEN
-# MAGIC --              shortage_quantity_uom1 > 0
-# MAGIC --      
-# MAGIC --        Same fix applied to:
-# MAGIC --          - policy_quantity_uom1 (lot-sized order qty)
-# MAGIC --          - policy_qty_if_open_released (with open PO scenario)
-# MAGIC --      
-# MAGIC --      IMPACT:
-# MAGIC --        - 115 Fixed Reorder Qty. items no longer auto-refill on ROP
-# MAGIC --        - Only refill when FIRMED demand creates actual shortage
-# MAGIC --        - Pearls/Findings/Solder buffer items: rely on Planned PRO timeline
-# MAGIC --          to convert to FIRMED early enough for lead time
-# MAGIC --      
-# MAGIC --      WHAT'S PRESERVED:
-# MAGIC --        - L4L policy: still triggers on shortage (unchanged)
-# MAGIC --        - All policies: still ROUND UP via min_order_qty / max_order_qty /
-# MAGIC --          order_multiple (lot sizing intact)
-# MAGIC --        - is_dnd, customer enrichment, all v9.4.16-18 logic
+# MAGIC --   🎯 TIME-PHASED PO + RELEASED-ONLY SUPPLY (fix shortage=0 bug)
 # MAGIC --
-# MAGIC -- 🛡️ Changes scope vs v9.4.18: 1 CTE touched
-# MAGIC --   - Layer 5 v6_with_lot_sizing — 3 CASE branches simplified
-# MAGIC -- All other logic UNCHANGED.
-# MAGIC -- =====================================================================
-# MAGIC 
-# MAGIC 
-# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead = LEGACY;
-# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = LEGACY;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInRead = LEGACY;
-# MAGIC SET spark.sql.parquet.int96RebaseModeInWrite = LEGACY;
-# MAGIC 
-# MAGIC 
-# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC USING DELTA
-# MAGIC AS
-# MAGIC WITH
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 0: Ship date lookup (UNCHANGED)
-# MAGIC -- =====================================================
-# MAGIC production_order_dedup AS (
-# MAGIC     SELECT *
-# MAGIC     FROM (
-# MAGIC         SELECT *,
-# MAGIC             ROW_NUMBER() OVER (
-# MAGIC                 PARTITION BY `No.`, Status, `BC Company`
-# MAGIC                 ORDER BY SystemRowVersion DESC
-# MAGIC             ) AS rn_po
-# MAGIC         FROM Silver_BC_Lakehouse.bc.`Production Order`
-# MAGIC         WHERE `BC Company` = 'Ennovie'
-# MAGIC           AND Status IN ('Released', 'Firm Planned', 'Planned')
-# MAGIC           AND `Sales Order No.` IS NOT NULL
-# MAGIC           AND `Sales Order No.` <> ''
-# MAGIC     )
-# MAGIC     WHERE rn_po = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC sales_line_dedup AS (
-# MAGIC     SELECT *
-# MAGIC     FROM (
-# MAGIC         SELECT *,
-# MAGIC             ROW_NUMBER() OVER (
-# MAGIC                 PARTITION BY `Document No.`, `Document Type`, `Line No.`, `BC Company`
-# MAGIC                 ORDER BY SystemRowVersion DESC
-# MAGIC             ) AS rn_sl
-# MAGIC         FROM Silver_BC_Lakehouse.bc.`Sales Line`
-# MAGIC         WHERE `BC Company` = 'Ennovie'
-# MAGIC           AND `Document Type` = 'Order'
-# MAGIC           AND Type = 'Item'
-# MAGIC           AND `Outstanding Quantity` > 0
-# MAGIC     )
-# MAGIC     WHERE rn_sl = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC ship_date_lookup AS (
-# MAGIC     SELECT
-# MAGIC         v.component_item_no                          AS item_no,
-# MAGIC         DATE_TRUNC('week', v.required_date)          AS bucket_start_date,
-# MAGIC         MIN(sl.`Shipment Date`)                      AS sales_line_ship_date
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_Material_Availability v
-# MAGIC     INNER JOIN production_order_dedup po
-# MAGIC         ON po.`No.` = v.source_record_id
-# MAGIC        AND po.`Status` = v.source_status
-# MAGIC     INNER JOIN sales_line_dedup sl
-# MAGIC         ON sl.`Document No.` = po.`Sales Order No.`
-# MAGIC        AND sl.`No.`          = po.`Source No.`
-# MAGIC     WHERE v.demand_type = 'FIRMED_BOM'
-# MAGIC       AND v.required_qty > 0
-# MAGIC       AND v.required_date IS NOT NULL
-# MAGIC     GROUP BY v.component_item_no, DATE_TRUNC('week', v.required_date)
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 0.5: PRO Component dedup (UNCHANGED)
-# MAGIC -- =====================================================
-# MAGIC pro_component_dedup AS (
-# MAGIC     SELECT *
-# MAGIC     FROM (
-# MAGIC         SELECT *,
-# MAGIC             ROW_NUMBER() OVER (
-# MAGIC                 PARTITION BY `Prod. Order No.`, `Prod. Order Line No.`, `Line No.`, `BC Company`
-# MAGIC                 ORDER BY SystemRowVersion DESC
-# MAGIC             ) AS rn
-# MAGIC         FROM Silver_BC_Lakehouse.bc.`Prod Order Component`
-# MAGIC         WHERE `BC Company` = 'Ennovie'
-# MAGIC           AND Status IN ('Released', 'Firm Planned', 'Planned')
-# MAGIC           AND `Remaining Quantity` > 0
-# MAGIC     )
-# MAGIC     WHERE rn = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 0.6: FIRMED_BOM UOM2 lookup (UNCHANGED)
-# MAGIC -- =====================================================
-# MAGIC poc_uom2_line_level AS (
-# MAGIC     SELECT
-# MAGIC         `Prod. Order No.`                              AS pro_no,
-# MAGIC         `Prod. Order Line No.`                         AS parent_line_no,
-# MAGIC         `Item No.`                                     AS comp_item_no,
-# MAGIC         SUM(CAST(`Expected Units_DU_TSL` AS DECIMAL(38,10))) AS expected_units_uom2,
-# MAGIC         MAX(`Unit of Measure - Units_DU_TSL`)          AS uom2_code
-# MAGIC     FROM Silver_BC_Lakehouse.bc.`Prod Order Component`
-# MAGIC     WHERE `BC Company` = 'Ennovie'
-# MAGIC       AND `Expected Units_DU_TSL` > 0
-# MAGIC     GROUP BY
-# MAGIC         `Prod. Order No.`,
-# MAGIC         `Prod. Order Line No.`,
-# MAGIC         `Item No.`
-# MAGIC ),
-# MAGIC 
-# MAGIC firmed_bom_uom2_lookup AS (
-# MAGIC     SELECT
-# MAGIC         v.component_item_no                          AS item_no,
-# MAGIC         DATE_TRUNC('week', v.required_date)          AS bucket_start_date,
-# MAGIC         SUM(poc.expected_units_uom2)                 AS firmed_bom_qty_uom2
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_Material_Availability v
-# MAGIC     INNER JOIN poc_uom2_line_level poc
-# MAGIC         ON poc.pro_no         = v.source_record_id
-# MAGIC        AND poc.comp_item_no   = v.component_item_no
-# MAGIC        AND poc.parent_line_no = TRY_CAST(v.source_line_id AS INT)
-# MAGIC     WHERE v.demand_type = 'FIRMED_BOM'
-# MAGIC       AND v.required_qty > 0
-# MAGIC       AND v.required_date IS NOT NULL
-# MAGIC     GROUP BY v.component_item_no, DATE_TRUNC('week', v.required_date)
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 0.7: Primary customer per bucket (UNCHANGED from v9.4.17)
-# MAGIC -- =====================================================
-# MAGIC customer_per_bucket_qty AS (
-# MAGIC     SELECT
-# MAGIC         v.component_item_no                  AS item_no,
-# MAGIC         DATE_TRUNC('week', v.required_date)  AS bucket_start_date,
-# MAGIC         v.customer_no,
-# MAGIC         v.customer_name,
-# MAGIC         SUM(v.required_qty)                  AS total_qty
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_Material_Availability v
-# MAGIC     WHERE v.demand_type = 'FIRMED_BOM'
-# MAGIC       AND v.required_qty > 0
-# MAGIC       AND v.required_date IS NOT NULL
-# MAGIC       AND v.customer_no IS NOT NULL
-# MAGIC     GROUP BY
-# MAGIC         v.component_item_no,
-# MAGIC         DATE_TRUNC('week', v.required_date),
-# MAGIC         v.customer_no,
-# MAGIC         v.customer_name
-# MAGIC ),
-# MAGIC 
-# MAGIC primary_customer AS (
-# MAGIC     SELECT
-# MAGIC         item_no,
-# MAGIC         bucket_start_date,
-# MAGIC         customer_no       AS primary_customer_no,
-# MAGIC         customer_name     AS primary_customer_name,
-# MAGIC         CONCAT(customer_no, ' ', customer_name) AS customer_display
-# MAGIC     FROM (
-# MAGIC         SELECT
-# MAGIC             item_no,
-# MAGIC             bucket_start_date,
-# MAGIC             customer_no,
-# MAGIC             customer_name,
-# MAGIC             ROW_NUMBER() OVER (
-# MAGIC                 PARTITION BY item_no, bucket_start_date
-# MAGIC                 ORDER BY total_qty DESC, customer_no ASC
-# MAGIC             ) AS rn
-# MAGIC         FROM customer_per_bucket_qty
-# MAGIC     )
-# MAGIC     WHERE rn = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC customer_count_per_bucket AS (
-# MAGIC     SELECT
-# MAGIC         item_no,
-# MAGIC         bucket_start_date,
-# MAGIC         COUNT(DISTINCT customer_no)          AS customer_count
-# MAGIC     FROM customer_per_bucket_qty
-# MAGIC     GROUP BY item_no, bucket_start_date
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 1: V6 demand bucketing (UNCHANGED from v9.4.18)
-# MAGIC -- =====================================================
-# MAGIC v6_bucketed_raw AS (
-# MAGIC     SELECT
-# MAGIC         v.component_item_no                 AS item_no,
-# MAGIC         DATE_TRUNC('week', v.required_date) AS bucket_start_date,
-# MAGIC         MAX(v.component_description)        AS description,
-# MAGIC         MAX(v.item_category)                AS item_category_code,
-# MAGIC         MAX(v.material_type)                AS material_type,
-# MAGIC         MAX(v.metal_category)               AS metal_category,
-# MAGIC         MAX(v.is_critical_item)             AS is_critical_item,
-# MAGIC         MAX(v.base_uom)                     AS base_uom_uom1,
-# MAGIC 
-# MAGIC         SUM(CASE WHEN v.demand_type = 'FIRMED_BOM'
-# MAGIC                  THEN v.required_qty ELSE 0 END)         AS demand_quantity_uom1_bucket,
-# MAGIC 
-# MAGIC         SUM(CASE WHEN v.demand_type = 'FIRMED_BOM' THEN 1 ELSE 0 END)
-# MAGIC                                                         AS demand_line_count_in_bucket,
-# MAGIC         MIN(CASE WHEN v.demand_type = 'FIRMED_BOM' THEN v.required_date END)
-# MAGIC                                                         AS bucket_earliest_demand_date,
-# MAGIC         MAX(CASE WHEN v.demand_type = 'FIRMED_BOM' THEN v.required_date END)
-# MAGIC                                                         AS bucket_latest_demand_date,
-# MAGIC         MIN(CASE WHEN v.demand_type = 'FIRMED_BOM' THEN v.required_date END)
-# MAGIC                                                         AS due_date,
-# MAGIC         MIN(CASE WHEN v.demand_type = 'FIRMED_BOM' THEN v.order_by_date END)
-# MAGIC                                                         AS earliest_order_by_date,
-# MAGIC 
-# MAGIC         SUM(CASE WHEN v.demand_type = 'FIRMED_BOM'        
-# MAGIC                  THEN v.required_qty ELSE 0 END) AS firmed_bom_qty,
-# MAGIC         SUM(CASE WHEN v.demand_type = 'POLICY_TRIGGERED'  
-# MAGIC                  THEN v.required_qty ELSE 0 END) AS policy_triggered_qty,
-# MAGIC         SUM(CASE WHEN v.demand_type = 'PLANNED_BOM'      
-# MAGIC                  THEN v.required_qty ELSE 0 END) AS planned_bom_qty,
-# MAGIC 
-# MAGIC         SUM(CASE WHEN v.demand_type = 'FIRMED_BOM' 
-# MAGIC                       AND COALESCE(v.is_dnd, FALSE) = TRUE
-# MAGIC                  THEN v.required_qty ELSE 0 END)
-# MAGIC                                                 AS dnd_demand_qty,
-# MAGIC 
-# MAGIC         BOOL_OR(CASE WHEN v.demand_type = 'FIRMED_BOM' 
-# MAGIC                           AND COALESCE(v.is_dnd, FALSE) = TRUE
-# MAGIC                       THEN TRUE ELSE FALSE END)
-# MAGIC                                                 AS has_dnd_demand,
-# MAGIC 
-# MAGIC         MAX(v.customer_no)                  AS customer_no_max,
-# MAGIC         BOOL_OR(COALESCE(v.is_dnd, FALSE))  AS is_dnd,
-# MAGIC         MAX(v.priority_score)               AS max_priority_score,
-# MAGIC         MAX(v.preferred_vendor_no)          AS vendor_no,
-# MAGIC         MAX(v.preferred_vendor_name)        AS vendor_name,
-# MAGIC         MAX(v.last_direct_cost)             AS v6_fallback_unit_cost,
-# MAGIC         MAX(v.lead_time_days)               AS lead_time_days
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_Material_Availability v
-# MAGIC     WHERE v.required_qty > 0
-# MAGIC       AND v.required_date IS NOT NULL
-# MAGIC     GROUP BY
-# MAGIC         v.component_item_no,
-# MAGIC         DATE_TRUNC('week', v.required_date)
-# MAGIC ),
-# MAGIC 
-# MAGIC v6_bucketed AS (
-# MAGIC     SELECT
-# MAGIC         v.*,
-# MAGIC         CONCAT(
-# MAGIC             CAST(EXTRACT(YEAROFWEEK FROM v.bucket_start_date) AS STRING),
-# MAGIC             '-W',
-# MAGIC             LPAD(CAST(EXTRACT(WEEK FROM v.bucket_start_date) AS STRING), 2, '0')
-# MAGIC         )                                            AS bucket_week,
-# MAGIC         sdl.sales_line_ship_date,
-# MAGIC         COALESCE(fbu.firmed_bom_qty_uom2, 0)         AS firmed_bom_qty_uom2,
-# MAGIC         pc.primary_customer_no                       AS customer_no,
-# MAGIC         pc.primary_customer_name                     AS customer_name,
-# MAGIC         pc.customer_display                          AS customer_display,
-# MAGIC         COALESCE(ccb.customer_count, 0)              AS customer_count
-# MAGIC     FROM v6_bucketed_raw v
-# MAGIC     LEFT JOIN ship_date_lookup sdl
-# MAGIC         ON sdl.item_no           = v.item_no
-# MAGIC        AND sdl.bucket_start_date = v.bucket_start_date
-# MAGIC     LEFT JOIN firmed_bom_uom2_lookup fbu
-# MAGIC         ON fbu.item_no           = v.item_no
-# MAGIC        AND fbu.bucket_start_date = v.bucket_start_date
-# MAGIC     LEFT JOIN primary_customer pc
-# MAGIC         ON pc.item_no            = v.item_no
-# MAGIC        AND pc.bucket_start_date  = v.bucket_start_date
-# MAGIC     LEFT JOIN customer_count_per_bucket ccb
-# MAGIC         ON ccb.item_no           = v.item_no
-# MAGIC        AND ccb.bucket_start_date = v.bucket_start_date
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 2: Item Master + module + UOM2 code (UNCHANGED)
-# MAGIC -- =====================================================
-# MAGIC bc_item_uom2 AS (
-# MAGIC     SELECT
-# MAGIC         `No.` AS item_no,
-# MAGIC         `Unit of Measure - Units_DU_TSL` AS item_uom2_code
-# MAGIC     FROM (
-# MAGIC         SELECT *,
-# MAGIC             ROW_NUMBER() OVER (
-# MAGIC                 PARTITION BY `No.`, `BC Company`
-# MAGIC                 ORDER BY SystemRowVersion DESC
-# MAGIC             ) AS rn
-# MAGIC         FROM Silver_BC_Lakehouse.bc.`Item`
-# MAGIC         WHERE `BC Company` = 'Ennovie'
-# MAGIC     )
-# MAGIC     WHERE rn = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC item_planning AS (
-# MAGIC     SELECT
-# MAGIC         im.item_no,
-# MAGIC         im.reordering_policy,
-# MAGIC         im.replenishment_system,
-# MAGIC         im.archetype,
-# MAGIC         im.rop_qty                          AS reorder_point_uom1,
-# MAGIC         im.roq_qty                          AS reorder_quantity_uom1,
-# MAGIC         im.max_inv_qty                      AS maximum_inventory_uom1,
-# MAGIC         im.safety_stock_qty                 AS safety_stock_uom1,
-# MAGIC         im.min_order_qty                    AS min_order_qty,
-# MAGIC         im.max_order_qty                    AS max_order_qty,
-# MAGIC         im.order_multiple                   AS order_multiple,
-# MAGIC         im.scrap_pct                        AS scrap_pct,
-# MAGIC         im.effective_lead_days,
-# MAGIC         im.purch_uom                        AS secondary_uom_uom2,
-# MAGIC         bcu.item_uom2_code,
-# MAGIC         CASE
-# MAGIC             WHEN im.item_category IN (
-# MAGIC                 'MIXED METAL', 'CASTING', 'MST',
-# MAGIC                 'PURE METAL', 'ALLOY', 'SOLDER', 'SEMI-FG'
-# MAGIC             ) THEN 'METAL_ALLOY'
-# MAGIC             ELSE 'COMPONENT'
-# MAGIC         END                                 AS module
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_Item_Master im
-# MAGIC     LEFT JOIN bc_item_uom2 bcu
-# MAGIC         ON bcu.item_no = im.item_no
-# MAGIC     WHERE im.is_blocked = FALSE
-# MAGIC       AND COALESCE(im.purchasing_blocked, FALSE) = FALSE
-# MAGIC       AND im.archetype <> 'SKIP'
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 2.5: Stock location aggregation (UNCHANGED)
-# MAGIC -- =====================================================
-# MAGIC stock_location_lookup AS (
-# MAGIC     SELECT
-# MAGIC         item_no,
-# MAGIC         CONCAT_WS(', ', COLLECT_SET(location_code)) AS best_stock_location
-# MAGIC     FROM (
-# MAGIC         SELECT DISTINCT
-# MAGIC             inv.item_no,
-# MAGIC             inv.location_code
-# MAGIC         FROM Gold_Inventory_Lakehouse.mrp.gold_inventory inv
-# MAGIC         WHERE inv.qty_on_hand > 0
-# MAGIC           AND COALESCE(inv.is_blocked_location, FALSE) = FALSE
-# MAGIC           AND inv.location_code IN (
-# MAGIC               'BAGGING','CASTING','CONSUME','CST_CUT','CST_ROOM','CZ-SYNT',
-# MAGIC               'DEBEERS','DIA-LAB','DIA-NAT','EQUIP','FG-NO-PO','FINDINGS',
-# MAGIC               'FIN-GOODS','GEMS','KIMAI','MATERIAL','OBSOLETE','OTHERS-MAT',
-# MAGIC               'PACKAGING','PEARLS','PLATING','POMELATO','PRE ALLOY','RETURNS',
-# MAGIC               'RUB MOLD','SEMI-F','SORTING','STONE-CUT','STR','TOOLS','WAX ROOM'
-# MAGIC           )
-# MAGIC     )
-# MAGIC     GROUP BY item_no
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 3: Inventory ATP (UNCHANGED from v9.4.16)
-# MAGIC -- =====================================================
-# MAGIC ile_stock_uom2 AS (
-# MAGIC     SELECT
-# MAGIC         ile.`Item No.` AS item_no,
-# MAGIC         SUM(CAST(ile.`Remaining Quantity` AS DECIMAL(38,10))) AS onhand_uom1_from_ile,
-# MAGIC         SUM(CAST(ile.`Units_DU_TSL` AS DECIMAL(38,10)))       AS onhand_uom2
-# MAGIC     FROM Silver_BC_Lakehouse.bc.`Item Ledger Entry` ile
-# MAGIC     INNER JOIN Gold_Inventory_Lakehouse.mrp.gold_inventory gi
-# MAGIC         ON gi.item_no       = ile.`Item No.`
-# MAGIC        AND gi.location_code = ile.`Location Code`
-# MAGIC        AND gi.lot_no        = ile.`Lot No.`
-# MAGIC     WHERE ile.`BC Company` = 'Ennovie'
-# MAGIC       AND ile.`Location Code` IN (
-# MAGIC           'BAGGING','CASTING','CONSUME','CST_CUT','CST_ROOM','CZ-SYNT',
-# MAGIC           'DEBEERS','DIA-LAB','DIA-NAT','EQUIP','FG-NO-PO','FINDINGS',
-# MAGIC           'FIN-GOODS','GEMS','KIMAI','MATERIAL','OBSOLETE','OTHERS-MAT',
-# MAGIC           'PACKAGING','PEARLS','PLATING','POMELATO','PRE ALLOY','RETURNS',
-# MAGIC           'RUB MOLD','SEMI-F','SORTING','STONE-CUT','STR','TOOLS','WAX ROOM'
-# MAGIC       )
-# MAGIC       AND COALESCE(gi.is_blocked_location, FALSE) = FALSE
-# MAGIC     GROUP BY ile.`Item No.`
-# MAGIC ),
-# MAGIC 
-# MAGIC active_pro_consumption AS (
-# MAGIC     SELECT
-# MAGIC         c.`Item No.`                AS item_no,
-# MAGIC         SUM(c.`Remaining Quantity`) AS pro_committed_qty,
-# MAGIC         SUM(CAST(c.`Units_DU_TSL` AS DECIMAL(38,10))) AS pro_committed_qty_uom2
-# MAGIC     FROM pro_component_dedup c
-# MAGIC     INNER JOIN Gold_Inventory_Lakehouse.mrp.gold_Item_Master im
-# MAGIC             ON im.item_no = c.`Item No.`
-# MAGIC     WHERE im.archetype <> 'SKIP'
-# MAGIC     GROUP BY c.`Item No.`
-# MAGIC ),
-# MAGIC 
-# MAGIC inventory_atp AS (
-# MAGIC     SELECT
-# MAGIC         inv.item_no,
-# MAGIC         SUM(inv.qty_on_hand)                                AS onhand_quantity_uom1,
-# MAGIC         SUM(inv.qty_available)                              AS available_qty_gross,
-# MAGIC         COALESCE(MAX(apc.pro_committed_qty), 0)             AS pro_committed_qty,
-# MAGIC         COALESCE(MAX(apc.pro_committed_qty_uom2), 0)        AS pro_committed_qty_uom2,
-# MAGIC         COALESCE(MAX(isu.onhand_uom2), 0)                   AS onhand_quantity_uom2,
-# MAGIC         SUM(inv.qty_available)                              AS available_qty_atp,
-# MAGIC         COALESCE(MAX(isu.onhand_uom2), 0)                   AS available_qty_atp_uom2
-# MAGIC     FROM Gold_Inventory_Lakehouse.mrp.gold_inventory inv
-# MAGIC     LEFT JOIN active_pro_consumption apc ON apc.item_no = inv.item_no
-# MAGIC     LEFT JOIN ile_stock_uom2 isu          ON isu.item_no = inv.item_no
-# MAGIC     WHERE COALESCE(inv.is_blocked_location, FALSE) = FALSE
-# MAGIC       AND inv.location_code IN (
-# MAGIC           'BAGGING','CASTING','CONSUME','CST_CUT','CST_ROOM','CZ-SYNT',
-# MAGIC           'DEBEERS','DIA-LAB','DIA-NAT','EQUIP','FG-NO-PO','FINDINGS',
-# MAGIC           'FIN-GOODS','GEMS','KIMAI','MATERIAL','OBSOLETE','OTHERS-MAT',
-# MAGIC           'PACKAGING','PEARLS','PLATING','POMELATO','PRE ALLOY','RETURNS',
-# MAGIC           'RUB MOLD','SEMI-F','SORTING','STONE-CUT','STR','TOOLS','WAX ROOM'
-# MAGIC       )
-# MAGIC     GROUP BY inv.item_no
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 4: PO incoming (UNCHANGED)
-# MAGIC -- =====================================================
-# MAGIC purchase_header_dedup AS (
-# MAGIC     SELECT *
-# MAGIC     FROM (
-# MAGIC         SELECT *,
-# MAGIC             ROW_NUMBER() OVER (
-# MAGIC                 PARTITION BY `No.`, `Document Type`, `BC Company`
-# MAGIC                 ORDER BY SystemRowVersion DESC
-# MAGIC             ) AS rn_ph
-# MAGIC         FROM Silver_BC_Lakehouse.bc.`Purchase Header`
-# MAGIC         WHERE `BC Company` = 'Ennovie'
-# MAGIC           AND `Document Type` = 'Order'
-# MAGIC     )
-# MAGIC     WHERE rn_ph = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC purchase_line_dedup AS (
-# MAGIC     SELECT *
-# MAGIC     FROM (
-# MAGIC         SELECT *,
-# MAGIC             ROW_NUMBER() OVER (
-# MAGIC                 PARTITION BY `Document No.`, `Document Type`, `Line No.`, `BC Company`
-# MAGIC                 ORDER BY SystemRowVersion DESC
-# MAGIC             ) AS rn_pl
-# MAGIC         FROM Silver_BC_Lakehouse.bc.`Purchase Line`
-# MAGIC         WHERE `BC Company` = 'Ennovie'
-# MAGIC           AND `Document Type` = 'Order'
-# MAGIC           AND `Outstanding Quantity` > 0
-# MAGIC           AND `Expected Receipt Date` > DATE'1900-01-01'
-# MAGIC           AND Type = 'Item'
-# MAGIC     )
-# MAGIC     WHERE rn_pl = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC po_lines_with_status AS (
-# MAGIC     SELECT
-# MAGIC         pl.`No.`                              AS item_no,
-# MAGIC         ph.`No.`                              AS po_no,
-# MAGIC         pl.`Line No.`                         AS line_no,
-# MAGIC         ph.`Status`                           AS po_status,
-# MAGIC         pl.`Outstanding Qty. (Base)`          AS qty,
-# MAGIC         COALESCE(
-# MAGIC             CAST(pl.`Outstanding Units_DU_TSL` AS DECIMAL(38,10)),
-# MAGIC             0
-# MAGIC         )                                     AS qty_uom2,
-# MAGIC         pl.`Direct Unit Cost`                 AS direct_unit_cost,
-# MAGIC         pl.`Expected Receipt Date`            AS receipt_date,
-# MAGIC         ph.`Document Date`                    AS doc_date
-# MAGIC     FROM purchase_line_dedup pl
-# MAGIC     INNER JOIN purchase_header_dedup ph
-# MAGIC         ON ph.`No.` = pl.`Document No.`
-# MAGIC        AND ph.`Document Type` = pl.`Document Type`
-# MAGIC        AND ph.`BC Company` = pl.`BC Company`
-# MAGIC ),
-# MAGIC 
-# MAGIC po_released_agg AS (
-# MAGIC     SELECT
-# MAGIC         item_no,
-# MAGIC         SUM(qty) AS qty_released,
-# MAGIC         SUM(qty_uom2) AS qty_released_uom2,
-# MAGIC         MIN(receipt_date) AS earliest_released_receipt,
-# MAGIC         COUNT(DISTINCT po_no) AS released_po_count
-# MAGIC     FROM po_lines_with_status WHERE po_status = 'Released' GROUP BY item_no
-# MAGIC ),
-# MAGIC 
-# MAGIC po_open_agg AS (
-# MAGIC     SELECT
-# MAGIC         item_no,
-# MAGIC         SUM(qty) AS qty_open,
-# MAGIC         SUM(qty_uom2) AS qty_open_uom2,
-# MAGIC         MIN(receipt_date) AS earliest_open_receipt,
-# MAGIC         COUNT(DISTINCT po_no) AS open_po_count
-# MAGIC     FROM po_lines_with_status WHERE po_status = 'Open' GROUP BY item_no
-# MAGIC ),
-# MAGIC 
-# MAGIC latest_released_po AS (
-# MAGIC     SELECT item_no, direct_unit_cost AS released_unit_cost
-# MAGIC     FROM (
-# MAGIC         SELECT item_no, direct_unit_cost,
-# MAGIC             ROW_NUMBER() OVER (PARTITION BY item_no ORDER BY doc_date DESC, line_no DESC) AS rn
-# MAGIC         FROM po_lines_with_status WHERE po_status = 'Released'
-# MAGIC     ) WHERE rn = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC latest_open_po AS (
-# MAGIC     SELECT item_no, direct_unit_cost AS open_unit_cost
-# MAGIC     FROM (
-# MAGIC         SELECT item_no, direct_unit_cost,
-# MAGIC             ROW_NUMBER() OVER (PARTITION BY item_no ORDER BY doc_date DESC, line_no DESC) AS rn
-# MAGIC         FROM po_lines_with_status WHERE po_status = 'Open'
-# MAGIC     ) WHERE rn = 1
-# MAGIC ),
-# MAGIC 
-# MAGIC ile_avg AS (
-# MAGIC     SELECT `Item No.` AS item_no, SUM(ABS(Quantity)) / 180.0 AS avg_daily_usage
-# MAGIC     FROM Silver_BC_Lakehouse.bc.`Item Ledger Entry`
-# MAGIC     WHERE `BC Company` = 'Ennovie'
-# MAGIC       AND `Entry Type` = 'Consumption'
-# MAGIC       AND `Posting Date` >= ADD_MONTHS(CURRENT_DATE(), -6)
-# MAGIC     GROUP BY `Item No.`
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 5: Combine + lot sizing (⭐ v9.4.19 ROP refill DISABLED)
-# MAGIC -- =====================================================
-# MAGIC v6_with_running AS (
-# MAGIC     SELECT
-# MAGIC         v.*,
-# MAGIC         ip.module,
-# MAGIC         ip.item_uom2_code,
-# MAGIC         ip.reordering_policy,
-# MAGIC         ip.replenishment_system,
-# MAGIC         ip.archetype,
-# MAGIC         ip.reorder_point_uom1,
-# MAGIC         ip.reorder_quantity_uom1,
-# MAGIC         ip.maximum_inventory_uom1,
-# MAGIC         ip.safety_stock_uom1,
-# MAGIC         ip.min_order_qty,
-# MAGIC         ip.max_order_qty,
-# MAGIC         ip.order_multiple,
-# MAGIC         ip.effective_lead_days,
-# MAGIC         ip.secondary_uom_uom2,
-# MAGIC         sll.best_stock_location,
-# MAGIC         COALESCE(inv.onhand_quantity_uom1, 0)        AS onhand_quantity_uom1,
-# MAGIC         COALESCE(inv.onhand_quantity_uom2, 0)        AS onhand_quantity_uom2,
-# MAGIC         COALESCE(inv.available_qty_atp, 0)           AS available_qty_atp,
-# MAGIC         COALESCE(inv.available_qty_atp_uom2, 0)      AS available_qty_atp_uom2,
-# MAGIC         COALESCE(inv.pro_committed_qty, 0)           AS pro_committed_qty,
-# MAGIC         COALESCE(inv.pro_committed_qty_uom2, 0)      AS pro_committed_qty_uom2,
-# MAGIC         COALESCE(por.qty_released, 0)                AS incoming_po_released_qty,
-# MAGIC         COALESCE(por.qty_released_uom2, 0)           AS incoming_po_released_qty_uom2,
-# MAGIC         COALESCE(poo.qty_open, 0)                    AS incoming_po_open_qty,
-# MAGIC         COALESCE(poo.qty_open_uom2, 0)               AS incoming_po_open_qty_uom2,
-# MAGIC         COALESCE(por.earliest_released_receipt, poo.earliest_open_receipt)
-# MAGIC                                                      AS earliest_po_receipt_date,
-# MAGIC         COALESCE(por.released_po_count, 0)           AS released_po_count,
-# MAGIC         COALESCE(poo.open_po_count, 0)               AS open_po_count,
-# MAGIC         COALESCE(
-# MAGIC             lrp.released_unit_cost, lop.open_unit_cost, v.v6_fallback_unit_cost
-# MAGIC         )                                            AS unit_cost,
-# MAGIC         CASE
-# MAGIC             WHEN lrp.released_unit_cost IS NOT NULL THEN 'RELEASED_PO'
-# MAGIC             WHEN lop.open_unit_cost IS NOT NULL     THEN 'OPEN_PO'
-# MAGIC             ELSE 'ITEM_MASTER'
-# MAGIC         END                                          AS unit_cost_source,
-# MAGIC         COALESCE(ila.avg_daily_usage, 0)             AS avg_daily_usage,
-# MAGIC         SUM(v.demand_quantity_uom1_bucket) OVER (
-# MAGIC             PARTITION BY v.item_no ORDER BY v.bucket_start_date
-# MAGIC             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-# MAGIC         )                                            AS cumulative_demand_thru_bucket,
-# MAGIC         SUM(v.demand_quantity_uom1_bucket) OVER (
-# MAGIC             PARTITION BY v.item_no ORDER BY v.bucket_start_date
-# MAGIC             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-# MAGIC         )                                            AS cumulative_demand_before_bucket,
-# MAGIC         ROW_NUMBER() OVER (
-# MAGIC             PARTITION BY v.item_no
-# MAGIC             ORDER BY v.bucket_start_date
-# MAGIC         )                                            AS bucket_rank,
-# MAGIC         SUM(v.demand_quantity_uom1_bucket) OVER (
-# MAGIC             PARTITION BY v.item_no
-# MAGIC         )                                            AS item_total_demand_uom1,
-# MAGIC         SUM(v.firmed_bom_qty_uom2) OVER (
-# MAGIC             PARTITION BY v.item_no
-# MAGIC         )                                            AS item_total_firmed_demand_uom2
-# MAGIC     FROM v6_bucketed v
-# MAGIC     LEFT JOIN item_planning ip      ON ip.item_no = v.item_no
-# MAGIC     LEFT JOIN stock_location_lookup sll ON sll.item_no = v.item_no
-# MAGIC     LEFT JOIN inventory_atp inv     ON inv.item_no = v.item_no
-# MAGIC     LEFT JOIN po_released_agg por   ON por.item_no = v.item_no
-# MAGIC     LEFT JOIN po_open_agg poo       ON poo.item_no = v.item_no
-# MAGIC     LEFT JOIN latest_released_po lrp ON lrp.item_no = v.item_no
-# MAGIC     LEFT JOIN latest_open_po lop     ON lop.item_no = v.item_no
-# MAGIC     LEFT JOIN ile_avg ila           ON ila.item_no = v.item_no
-# MAGIC ),
-# MAGIC 
-# MAGIC v6_with_policy AS (
-# MAGIC     SELECT *,
-# MAGIC         GREATEST(
-# MAGIC             available_qty_atp + incoming_po_released_qty
-# MAGIC                 - COALESCE(cumulative_demand_before_bucket, 0), 0
-# MAGIC         )                                            AS available_before_bucket_uom1,
-# MAGIC         available_qty_atp + incoming_po_released_qty
-# MAGIC             - cumulative_demand_thru_bucket          AS net_position_after_bucket,
-# MAGIC         GREATEST(
-# MAGIC             demand_quantity_uom1_bucket
-# MAGIC                 - GREATEST(available_qty_atp + incoming_po_released_qty
-# MAGIC                     - COALESCE(cumulative_demand_before_bucket, 0), 0), 0
-# MAGIC         )                                            AS shortage_quantity_uom1,
-# MAGIC         GREATEST(
-# MAGIC             available_qty_atp + incoming_po_released_qty + incoming_po_open_qty
-# MAGIC                 - COALESCE(cumulative_demand_before_bucket, 0), 0
-# MAGIC         )                                            AS available_before_bucket_if_open,
-# MAGIC         GREATEST(
-# MAGIC             demand_quantity_uom1_bucket
-# MAGIC                 - GREATEST(available_qty_atp
-# MAGIC                     + incoming_po_released_qty + incoming_po_open_qty
-# MAGIC                     - COALESCE(cumulative_demand_before_bucket, 0), 0), 0
-# MAGIC         )                                            AS shortage_qty_if_open_released
-# MAGIC     FROM v6_with_running
-# MAGIC ),
-# MAGIC 
-# MAGIC -- ⭐ v9.4.19: ROP refill DISABLED — only shortage-based trigger
-# MAGIC -- All policies now trigger ONLY when shortage > 0 (driven by FIRMED demand)
-# MAGIC v6_with_lot_sizing AS (
-# MAGIC     SELECT *,
-# MAGIC         -- should_trigger: shortage-based only (no ROP refill)
-# MAGIC         CASE
-# MAGIC             WHEN reordering_policy = 'Lot-for-Lot'        
-# MAGIC                 THEN shortage_quantity_uom1 > 0
-# MAGIC             WHEN reordering_policy = 'Fixed Reorder Qty.' THEN
-# MAGIC                 shortage_quantity_uom1 > 0       -- ⭐ ROP branch REMOVED
-# MAGIC             ELSE shortage_quantity_uom1 > 0
-# MAGIC         END                                          AS should_trigger,
-# MAGIC 
-# MAGIC         -- policy_quantity_uom1: shortage-based only
-# MAGIC         CASE
-# MAGIC             WHEN reordering_policy = 'Lot-for-Lot' THEN shortage_quantity_uom1
-# MAGIC             WHEN reordering_policy = 'Fixed Reorder Qty.' THEN
-# MAGIC                 CASE
-# MAGIC                     WHEN shortage_quantity_uom1 > 0
-# MAGIC                         THEN shortage_quantity_uom1   -- ⭐ no ROQ refill branch
-# MAGIC                     ELSE 0
-# MAGIC                 END
-# MAGIC             ELSE GREATEST(shortage_quantity_uom1, 0)
-# MAGIC         END                                          AS policy_quantity_uom1,
-# MAGIC 
-# MAGIC         -- policy_qty_if_open_released: shortage-based only (with open PO scenario)
-# MAGIC         CASE
-# MAGIC             WHEN reordering_policy = 'Lot-for-Lot' THEN shortage_qty_if_open_released
-# MAGIC             WHEN reordering_policy = 'Fixed Reorder Qty.' THEN
-# MAGIC                 CASE
-# MAGIC                     WHEN shortage_qty_if_open_released > 0
-# MAGIC                         THEN shortage_qty_if_open_released   -- ⭐ no ROQ refill
-# MAGIC                     ELSE 0
-# MAGIC                 END
-# MAGIC             ELSE GREATEST(shortage_qty_if_open_released, 0)
-# MAGIC         END                                          AS policy_qty_if_open_released
-# MAGIC     FROM v6_with_policy
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 6: Stage calculation (UNCHANGED)
-# MAGIC -- =====================================================
-# MAGIC v6_with_stages AS (
-# MAGIC     SELECT *,
-# MAGIC         CASE WHEN sales_line_ship_date IS NOT NULL
-# MAGIC              THEN count_working_days(CURRENT_DATE(), sales_line_ship_date)
-# MAGIC              ELSE NULL
-# MAGIC         END                                          AS available_working_days,
-# MAGIC         CASE WHEN sales_line_ship_date IS NOT NULL
-# MAGIC              THEN calc_wax_start(sales_line_ship_date, CURRENT_DATE())
-# MAGIC              ELSE NULL
-# MAGIC         END                                          AS wax_start,
-# MAGIC         CASE WHEN sales_line_ship_date IS NOT NULL
-# MAGIC              THEN calc_semi_start(sales_line_ship_date, CURRENT_DATE())
-# MAGIC              ELSE NULL
-# MAGIC         END                                          AS semi_start
-# MAGIC     FROM v6_with_lot_sizing
-# MAGIC ),
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- LAYER 7: Order date computation (UNCHANGED)
-# MAGIC -- =====================================================
-# MAGIC v6_with_order_date AS (
-# MAGIC     SELECT *,
-# MAGIC         CASE
-# MAGIC             WHEN sales_line_ship_date IS NULL THEN
-# MAGIC                 DATE_SUB(due_date, COALESCE(effective_lead_days, lead_time_days, 14))
-# MAGIC             WHEN module = 'METAL_ALLOY' THEN
-# MAGIC                 sub_working_days(wax_start, COALESCE(effective_lead_days, lead_time_days, 14))
-# MAGIC             ELSE
-# MAGIC                 sub_working_days(semi_start, COALESCE(effective_lead_days, lead_time_days, 14))
-# MAGIC         END                                          AS suggested_order_date_raw
-# MAGIC     FROM v6_with_stages
-# MAGIC ),
-# MAGIC 
-# MAGIC v6_with_order_dates_full AS (
-# MAGIC     SELECT *,
-# MAGIC         GREATEST(suggested_order_date_raw, CURRENT_DATE()) AS suggested_order_date_actionable_calc
-# MAGIC     FROM v6_with_order_date
-# MAGIC )
-# MAGIC 
-# MAGIC -- =====================================================
-# MAGIC -- FINAL SELECT (UNCHANGED structure from v9.4.18)
-# MAGIC -- =====================================================
-# MAGIC SELECT
-# MAGIC     UUID()                                           AS systemID,
-# MAGIC     'Ennovie'                                        AS bc_company,
-# MAGIC     item_no,
-# MAGIC     CAST(NULL AS STRING)                             AS variant_code,
-# MAGIC     bucket_week,
-# MAGIC     bucket_start_date,
-# MAGIC     DATE_ADD(bucket_start_date, 6)                   AS bucket_end_date,
-# MAGIC     description,
-# MAGIC     item_category_code,
-# MAGIC     material_type,
-# MAGIC     metal_category,
-# MAGIC     is_critical_item                                 AS is_critical,
-# MAGIC     base_uom_uom1,
-# MAGIC     secondary_uom_uom2,
-# MAGIC     item_uom2_code,
-# MAGIC     module,
-# MAGIC 
-# MAGIC     demand_quantity_uom1_bucket,
-# MAGIC     demand_line_count_in_bucket,
-# MAGIC     bucket_earliest_demand_date,
-# MAGIC     bucket_latest_demand_date,
-# MAGIC     firmed_bom_qty,
-# MAGIC     firmed_bom_qty_uom2,
-# MAGIC     policy_triggered_qty,
-# MAGIC     planned_bom_qty,
-# MAGIC 
-# MAGIC     dnd_demand_qty,
-# MAGIC     has_dnd_demand,
-# MAGIC 
-# MAGIC     onhand_quantity_uom1,
-# MAGIC     onhand_quantity_uom2,
-# MAGIC     available_qty_atp                                AS available_qty_atp_uom1,
-# MAGIC     available_qty_atp_uom2,
-# MAGIC     pro_committed_qty,
-# MAGIC     pro_committed_qty_uom2,
-# MAGIC     available_before_bucket_uom1,
-# MAGIC     net_position_after_bucket                        AS available_after_bucket_uom1,
-# MAGIC     shortage_quantity_uom1,
-# MAGIC 
-# MAGIC     reordering_policy,
-# MAGIC     archetype,
-# MAGIC     reorder_point_uom1,
-# MAGIC     reorder_quantity_uom1,
-# MAGIC     maximum_inventory_uom1,
-# MAGIC     safety_stock_uom1,
-# MAGIC     min_order_qty,
-# MAGIC     max_order_qty,
-# MAGIC     order_multiple,
-# MAGIC 
-# MAGIC     incoming_po_released_qty,
-# MAGIC     incoming_po_released_qty_uom2,
-# MAGIC     incoming_po_open_qty,
-# MAGIC     incoming_po_open_qty_uom2,
-# MAGIC     earliest_po_receipt_date,
-# MAGIC     released_po_count,
-# MAGIC     open_po_count,
-# MAGIC     (incoming_po_open_qty > 0)                       AS has_pending_open_po,
-# MAGIC 
-# MAGIC     bucket_rank,
-# MAGIC 
-# MAGIC     should_trigger,
-# MAGIC     policy_quantity_uom1,
-# MAGIC     CASE
-# MAGIC         WHEN NOT should_trigger THEN 0
-# MAGIC         ELSE CEIL(
-# MAGIC                 LEAST(
-# MAGIC                     GREATEST(COALESCE(min_order_qty, 0), policy_quantity_uom1),
-# MAGIC                     COALESCE(NULLIF(max_order_qty, 0), policy_quantity_uom1)
-# MAGIC                 ) / GREATEST(order_multiple, 1)
-# MAGIC              ) * GREATEST(order_multiple, 1)
-# MAGIC     END                                              AS final_uom1,
-# MAGIC 
-# MAGIC     CASE
-# MAGIC         WHEN NOT should_trigger THEN 0
-# MAGIC         ELSE CEIL(
-# MAGIC                 LEAST(
-# MAGIC                     GREATEST(COALESCE(min_order_qty, 0), policy_qty_if_open_released),
-# MAGIC                     COALESCE(NULLIF(max_order_qty, 0), policy_qty_if_open_released)
-# MAGIC                 ) / GREATEST(order_multiple, 1)
-# MAGIC              ) * GREATEST(order_multiple, 1)
-# MAGIC     END                                              AS suggested_qty_if_open_released,
-# MAGIC 
-# MAGIC     CASE
-# MAGIC         WHEN NOT should_trigger THEN CAST(0 AS DECIMAL(38,20))
-# MAGIC         WHEN onhand_quantity_uom1 > 0 AND onhand_quantity_uom2 > 0 THEN
-# MAGIC             CAST(
-# MAGIC                 CEIL(
-# MAGIC                     LEAST(
-# MAGIC                         GREATEST(COALESCE(min_order_qty, 0), policy_quantity_uom1),
-# MAGIC                         COALESCE(NULLIF(max_order_qty, 0), policy_quantity_uom1)
-# MAGIC                     ) / GREATEST(order_multiple, 1)
-# MAGIC                 ) * GREATEST(order_multiple, 1)
-# MAGIC                 * (onhand_quantity_uom2 / onhand_quantity_uom1)
-# MAGIC                 AS DECIMAL(38,20)
-# MAGIC             )
-# MAGIC         ELSE CAST(NULL AS DECIMAL(38,20))
-# MAGIC     END                                              AS final_uom2,
-# MAGIC 
-# MAGIC     CASE
-# MAGIC         WHEN NOT should_trigger THEN CAST(0 AS DECIMAL(38,20))
-# MAGIC         WHEN onhand_quantity_uom1 > 0 AND onhand_quantity_uom2 > 0 THEN
-# MAGIC             CAST(
-# MAGIC                 CEIL(
-# MAGIC                     LEAST(
-# MAGIC                         GREATEST(COALESCE(min_order_qty, 0), policy_qty_if_open_released),
-# MAGIC                         COALESCE(NULLIF(max_order_qty, 0), policy_qty_if_open_released)
-# MAGIC                     ) / GREATEST(order_multiple, 1)
-# MAGIC                 ) * GREATEST(order_multiple, 1)
-# MAGIC                 * (onhand_quantity_uom2 / onhand_quantity_uom1)
-# MAGIC                 AS DECIMAL(38,20)
-# MAGIC             )
-# MAGIC         ELSE CAST(NULL AS DECIMAL(38,20))
-# MAGIC     END                                              AS suggested_qty_if_open_released_uom2,
-# MAGIC 
-# MAGIC     lead_time_days,
-# MAGIC     effective_lead_days,
-# MAGIC 
-# MAGIC     sales_line_ship_date,
-# MAGIC     available_working_days,
-# MAGIC     wax_start,
-# MAGIC     semi_start,
-# MAGIC 
-# MAGIC     suggested_order_date_raw                         AS suggested_order_date,
-# MAGIC     suggested_order_date_actionable_calc             AS suggested_order_date_actionable,
-# MAGIC     CONCAT(
-# MAGIC         CAST(EXTRACT(YEAROFWEEK FROM suggested_order_date_raw) AS STRING),
-# MAGIC         '-W',
-# MAGIC         LPAD(CAST(EXTRACT(WEEK FROM suggested_order_date_raw) AS STRING), 2, '0')
-# MAGIC     )                                                AS suggested_order_week,
-# MAGIC     CONCAT(
-# MAGIC         CAST(EXTRACT(YEAROFWEEK FROM suggested_order_date_actionable_calc) AS STRING),
-# MAGIC         '-W',
-# MAGIC         LPAD(CAST(EXTRACT(WEEK FROM suggested_order_date_actionable_calc) AS STRING), 2, '0')
-# MAGIC     )                                                AS suggested_order_week_actionable,
-# MAGIC 
-# MAGIC     due_date,
-# MAGIC     earliest_order_by_date                           AS order_by_date,
-# MAGIC 
-# MAGIC     CASE
-# MAGIC         WHEN sales_line_ship_date IS NULL                                     THEN 'NO_SHIP_DATE'
-# MAGIC         WHEN suggested_order_date_raw < CURRENT_DATE()                        THEN 'OVERDUE'
-# MAGIC         WHEN suggested_order_date_raw <= DATE_ADD(CURRENT_DATE(), 7)          THEN 'URGENT'
-# MAGIC         WHEN suggested_order_date_raw <= DATE_ADD(CURRENT_DATE(), 30)         THEN 'SOON'
-# MAGIC         ELSE 'OK'
-# MAGIC     END                                              AS po_urgency,
-# MAGIC 
-# MAGIC     avg_daily_usage,
-# MAGIC     ROUND(avg_daily_usage * 60, 0)                   AS forecast_demand_60d,
-# MAGIC     CASE
-# MAGIC         WHEN avg_daily_usage > 0 THEN
-# MAGIC             DATE_ADD(CURRENT_DATE(),
-# MAGIC                 CAST(GREATEST(onhand_quantity_uom1 + incoming_po_released_qty, 0)
-# MAGIC                     / NULLIF(avg_daily_usage, 0) AS INT))
-# MAGIC         ELSE NULL
-# MAGIC     END                                              AS projected_stockout_date,
-# MAGIC 
-# MAGIC     customer_no,
-# MAGIC     customer_name,
-# MAGIC     customer_display,
-# MAGIC     customer_count,
-# MAGIC 
-# MAGIC     is_dnd,
-# MAGIC     max_priority_score                               AS priority_score,
-# MAGIC 
-# MAGIC     vendor_no,
-# MAGIC     vendor_name,
-# MAGIC     unit_cost,
-# MAGIC     unit_cost_source,
-# MAGIC     ROUND(
-# MAGIC         CASE WHEN NOT should_trigger THEN 0
-# MAGIC              ELSE policy_quantity_uom1 * COALESCE(unit_cost, 0)
-# MAGIC         END, 2
-# MAGIC     )                                                AS cost_amount,
-# MAGIC 
-# MAGIC     best_stock_location,
-# MAGIC     replenishment_system,
-# MAGIC     item_total_demand_uom1,
-# MAGIC     item_total_firmed_demand_uom2,
-# MAGIC 
-# MAGIC     CASE
-# MAGIC         WHEN onhand_quantity_uom1 = 0 AND demand_quantity_uom1_bucket > 0 THEN 'STOCKOUT'
-# MAGIC         WHEN onhand_quantity_uom1 < COALESCE(safety_stock_uom1, 0) AND COALESCE(safety_stock_uom1, 0) > 0 THEN 'BELOW_SAFETY'
-# MAGIC         WHEN onhand_quantity_uom1 < COALESCE(reorder_point_uom1, 0) AND COALESCE(reorder_point_uom1, 0) > 0 THEN 'BELOW_ROP'
-# MAGIC         WHEN should_trigger AND due_date <= DATE_ADD(CURRENT_DATE(), 14) THEN 'NEEDS_ORDER'
-# MAGIC         ELSE 'OK'
-# MAGIC     END                                              AS alert_flag,
-# MAGIC 
-# MAGIC     'v9.4.19'                                        AS source_version,    -- ⭐ bumped
-# MAGIC     CURRENT_TIMESTAMP()                              AS view_built_at
-# MAGIC 
-# MAGIC FROM v6_with_order_dates_full
-# MAGIC WHERE module IS NOT NULL;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============================================================================
-# MAGIC -- 🆕 v9.4.19 verification — ROP refill DISABLED
-# MAGIC -- ============================================================================
-# MAGIC 
-# MAGIC -- VC42: GE-PL-001780 canary — should NOT trigger anymore
-# MAGIC SELECT
-# MAGIC     item_no, bucket_week,
-# MAGIC     reordering_policy,
-# MAGIC     firmed_bom_qty,
-# MAGIC     onhand_quantity_uom1,
-# MAGIC     reorder_point_uom1,
-# MAGIC     shortage_quantity_uom1,
-# MAGIC     should_trigger,
-# MAGIC     final_uom1,
-# MAGIC     alert_flag
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC WHERE item_no = 'GE-PL-001780'
-# MAGIC ORDER BY bucket_week;
-# MAGIC -- ✅ PASS if: should_trigger = FALSE, final_uom1 = 0
-# MAGIC --           (no FIRMED demand → no trigger)
-# MAGIC 
-# MAGIC 
-# MAGIC -- VC43: Items with Fixed Reorder Qty policy + no FIRMED — should NOT trigger
-# MAGIC SELECT 
-# MAGIC     COUNT(*) AS rows,
-# MAGIC     SUM(CASE WHEN should_trigger THEN 1 ELSE 0 END) AS triggered_rows,
-# MAGIC     SUM(final_uom1) AS total_qty
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC WHERE reordering_policy = 'Fixed Reorder Qty.'
-# MAGIC   AND firmed_bom_qty = 0;
-# MAGIC -- ✅ PASS if: triggered_rows = 0, total_qty = 0
-# MAGIC --           (no FIRMED → no ROP refill)
-# MAGIC 
-# MAGIC 
-# MAGIC -- VC44: Items with Fixed Reorder Qty policy + FIRMED demand — SHOULD trigger
-# MAGIC SELECT 
-# MAGIC     COUNT(*) AS rows,
-# MAGIC     SUM(CASE WHEN should_trigger THEN 1 ELSE 0 END) AS triggered_rows,
-# MAGIC     SUM(CASE WHEN shortage_quantity_uom1 > 0 THEN 1 ELSE 0 END) AS shortage_rows
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC WHERE reordering_policy = 'Fixed Reorder Qty.'
-# MAGIC   AND firmed_bom_qty > 0
-# MAGIC   AND shortage_quantity_uom1 > 0;
-# MAGIC -- ✅ PASS if: triggered_rows = shortage_rows
-# MAGIC --           (shortage-based trigger still works)
-# MAGIC 
-# MAGIC 
-# MAGIC -- VC45: Policy distribution — what's still triggering
-# MAGIC SELECT
-# MAGIC     reordering_policy,
-# MAGIC     COUNT(*) AS rows,
-# MAGIC     SUM(CASE WHEN should_trigger THEN 1 ELSE 0 END) AS triggered_rows,
-# MAGIC     SUM(final_uom1) AS total_final_uom1,
-# MAGIC     ROUND(SUM(cost_amount), 0) AS total_cost
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC GROUP BY reordering_policy
-# MAGIC ORDER BY total_final_uom1 DESC;
-# MAGIC 
-# MAGIC 
-# MAGIC -- VC46: Impact summary — compare to v9.4.18
-# MAGIC SELECT
-# MAGIC     COUNT(DISTINCT item_no) AS total_items,
-# MAGIC     SUM(CASE WHEN should_trigger THEN 1 ELSE 0 END) AS triggered_rows,
-# MAGIC     SUM(CASE WHEN final_uom1 > 0 THEN 1 ELSE 0 END) AS rows_with_qty,
-# MAGIC     SUM(final_uom1) AS total_final_uom1,
-# MAGIC     ROUND(SUM(cost_amount), 0) AS total_cost_thb
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line;
-# MAGIC -- ℹ️ Expected: lower than v9.4.18 (97.7M THB) — ROP-only items now excluded
-# MAGIC --    Items removed = Fixed Reorder Qty. items with firmed_bom_qty = 0
-# MAGIC 
-# MAGIC 
-# MAGIC -- VC47: ROP items "at risk" — visibility query (informational)
-# MAGIC -- These are items where on_hand <= ROP, but engine doesn't trigger
-# MAGIC -- (because no FIRMED demand). Production team may want to convert
-# MAGIC -- Planned → Released PROs for these to ensure timely refill.
-# MAGIC SELECT
-# MAGIC     item_no,
-# MAGIC     description,
-# MAGIC     onhand_quantity_uom1,
-# MAGIC     reorder_point_uom1,
-# MAGIC     reorder_quantity_uom1,
-# MAGIC     incoming_po_released_qty,
-# MAGIC     planned_bom_qty,
-# MAGIC     customer_display
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC WHERE reordering_policy = 'Fixed Reorder Qty.'
-# MAGIC   AND firmed_bom_qty = 0
-# MAGIC   AND onhand_quantity_uom1 <= reorder_point_uom1
-# MAGIC   AND bucket_rank = 1
-# MAGIC ORDER BY (reorder_point_uom1 - onhand_quantity_uom1) DESC
-# MAGIC LIMIT 30;
-# MAGIC 
-# MAGIC 
-# MAGIC -- VC48: Cascade timestamp
-# MAGIC SELECT 'V6'                          AS layer, MAX(view_built_at) AS last_built
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Material_Availability
-# MAGIC UNION ALL
-# MAGIC SELECT 'fabric_req v9.4.19', MAX(view_built_at)
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line;
-# MAGIC 
-# MAGIC 
-# MAGIC -- ============================================================================
-# MAGIC -- REGRESSION CHECKS — preserved canaries
-# MAGIC -- ============================================================================
-# MAGIC 
-# MAGIC -- VC49: AC-CZ-000022 canary — v9.4.17 customer enrichment preserved
-# MAGIC SELECT
-# MAGIC     item_no, bucket_week,
-# MAGIC     firmed_bom_qty, dnd_demand_qty,
-# MAGIC     customer_display, customer_count,
-# MAGIC     final_uom1
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC WHERE item_no = 'AC-CZ-000022'
-# MAGIC ORDER BY bucket_start_date;
-# MAGIC 
-# MAGIC 
-# MAGIC -- VC50: AC-CZ-000021 canary — v9.4.16 Bug 7 fix preserved
-# MAGIC SELECT
-# MAGIC     item_no, bucket_week,
-# MAGIC     onhand_quantity_uom1, available_qty_atp_uom1,
-# MAGIC     demand_quantity_uom1_bucket, firmed_bom_qty,
-# MAGIC     dnd_demand_qty,
-# MAGIC     final_uom1, alert_flag
-# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
-# MAGIC WHERE item_no = 'AC-CZ-000021'
-# MAGIC ORDER BY bucket_week;
-
-# METADATA ********************
-
-# META {
-# META   "language": "sparksql",
-# META   "language_group": "synapse_pyspark",
-# META   "frozen": true,
-# META   "editable": false
-# META }
-
-# CELL ********************
-
-# MAGIC %%sql
-# MAGIC -- =====================================================================
-# MAGIC -- 📦 fabric_requisition_line v9.4.22 — Cell 2 (FULL NOTEBOOK)
-# MAGIC -- =====================================================================
-# MAGIC -- Run AFTER Cell 1 (UDFs registered)
+# MAGIC --     BUG (verified 2026-06-02):
+# MAGIC --       incoming_po_released_qty (scalar ต่อ item) ถูกบวกเป็น supply "ทุก bucket"
+# MAGIC --       เท่ากัน โดยไม่สน receipt date → PO ที่ของยังไม่มาถึงถูกนับล่วงหน้า
+# MAGIC --       → shortage=0 ทั้งที่ของจริงขาดในช่วงก่อน PO มา.
+# MAGIC --       ตัวอย่าง DI-RD-000362: PO 660 receipt 6/5 แต่ demand W22 (ก่อน 6/5)=244,
+# MAGIC --       onhand=77 → ควรขาด ~167 แต่ระบบรายงาน 0.
 # MAGIC --
-# MAGIC -- 🆕 v9.4.22 CHANGES (from v9.4.21):
+# MAGIC --     FIX:
+# MAGIC --       (a) TIME-PHASE: PO_released เข้าเป็น supply เฉพาะ bucket ที่
+# MAGIC --           earliest_po_receipt_date <= bucket_end_date. ก่อนของมาถึง = ไม่นับ.
+# MAGIC --           ใช้ earliest_po_receipt_date (มีอยู่แล้ว). ครอบคลุม 247/265 items
+# MAGIC --           ที่มี receipt date เดียว. 18 items multi-receipt = approximation
+# MAGIC --           (นับ PO ทั้งก้อนที่ receipt แรก — ยังดีกว่าเดิมที่นับตั้งแต่ bucket 1).
+# MAGIC --       (b) RELEASED-ONLY: เลิกนับ incoming_po_open_qty เป็น supply ใน shortage
+# MAGIC --           (per user rule: Open PO อาจปลอม/ยังไม่อนุมัติ). Open ยังโชว์ใน
+# MAGIC --           has_pending_open_po + suggested_qty_if_open_released (what-if) เท่านั้น.
+# MAGIC --       (c) onhand (available_qty_atp) ไม่แตะ — flat ถูกแล้ว (ของมีอยู่จริง).
+# MAGIC --
+# MAGIC --     KNOWN LIMITATION: 18 items multi-receipt-date ยังนับ PO ทั้งก้อนที่
+# MAGIC --       receipt แรก. แก้สมบูรณ์ต้อง refactor Layer 4 เป็น per-receipt bucketing
+# MAGIC --       (deferred — รอบนี้เอา approximation ที่ปลอดภัยก่อน).
+# MAGIC --
+# MAGIC --   ⬇️ v9.4.23 PURCHASE-ONLY GATE — RETAINED (item_planning).
+# MAGIC --   ⬇️ v9.4.22 UOM2-FIRST shortage — RETAINED (changes from v9.4.21):
 # MAGIC --
 # MAGIC --   🎯 UOM2-FIRST SHORTAGE: For dual-UOM items, check UOM2 sufficiency.
 # MAGIC --                            If UOM2 supply meets demand → no alert
@@ -8972,6 +8173,8 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MAGIC     WHERE im.is_blocked = FALSE
 # MAGIC       AND COALESCE(im.purchasing_blocked, FALSE) = FALSE
 # MAGIC       AND im.archetype <> 'SKIP'
+# MAGIC       -- v9.4.23 PURCHASE-ONLY GATE (retained): ออก signal เฉพาะของซื้อ
+# MAGIC       AND COALESCE(TRIM(im.replenishment_system), '') <> 'Prod. Order'
 # MAGIC ),
 # MAGIC 
 # MAGIC -- =====================================================
@@ -9197,6 +8400,18 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MAGIC         COALESCE(poo.qty_open_uom2, 0)               AS incoming_po_open_qty_uom2,
 # MAGIC         COALESCE(por.earliest_released_receipt, poo.earliest_open_receipt)
 # MAGIC                                                      AS earliest_po_receipt_date,
+# MAGIC         -- 🆕 v9.4.24: time-phased released PO — นับเฉพาะเมื่อของมาถึงแล้ว
+# MAGIC         -- (receipt date <= สิ้นสุด bucket). ใช้ใน shortage calc แทน flat qty.
+# MAGIC         CASE
+# MAGIC             WHEN por.earliest_released_receipt IS NOT NULL
+# MAGIC                  AND por.earliest_released_receipt <= DATE_ADD(v.bucket_start_date, 6)
+# MAGIC             THEN COALESCE(por.qty_released, 0) ELSE 0
+# MAGIC         END                                          AS po_released_available_this_bucket,
+# MAGIC         CASE
+# MAGIC             WHEN por.earliest_released_receipt IS NOT NULL
+# MAGIC                  AND por.earliest_released_receipt <= DATE_ADD(v.bucket_start_date, 6)
+# MAGIC             THEN COALESCE(por.qty_released_uom2, 0) ELSE 0
+# MAGIC         END                                          AS po_released_available_this_bucket_uom2,
 # MAGIC         COALESCE(por.released_po_count, 0)           AS released_po_count,
 # MAGIC         COALESCE(poo.open_po_count, 0)               AS open_po_count,
 # MAGIC         COALESCE(
@@ -9255,37 +8470,45 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MAGIC -- =====================================================
 # MAGIC v6_with_policy AS (
 # MAGIC     SELECT *,
-# MAGIC         -- UOM1 shortage (UNCHANGED — kept for single-UOM items)
+# MAGIC         -- =====================================================
+# MAGIC         -- 🆕 v9.4.24 shortage logic
+# MAGIC         --   supply = onhand (flat) + PO_released ที่ของมาถึงแล้ว (time-phased)
+# MAGIC         --   ❌ ไม่นับ incoming_po_open_qty (Open PO) เป็น supply อีกต่อไป
+# MAGIC         -- =====================================================
+# MAGIC         -- UOM1 available before bucket (released-only, time-phased)
 # MAGIC         GREATEST(
-# MAGIC             available_qty_atp + incoming_po_released_qty + incoming_po_open_qty
+# MAGIC             available_qty_atp + po_released_available_this_bucket
 # MAGIC                 - COALESCE(cumulative_demand_before_bucket, 0), 0
 # MAGIC         )                                            AS available_before_bucket_uom1,
-# MAGIC         available_qty_atp + incoming_po_released_qty + incoming_po_open_qty
+# MAGIC         available_qty_atp + po_released_available_this_bucket
 # MAGIC             - cumulative_demand_thru_bucket          AS net_position_after_bucket,
 # MAGIC         GREATEST(
 # MAGIC             demand_quantity_uom1_bucket
-# MAGIC                 - GREATEST(available_qty_atp + incoming_po_released_qty + incoming_po_open_qty
+# MAGIC                 - GREATEST(available_qty_atp + po_released_available_this_bucket
 # MAGIC                     - COALESCE(cumulative_demand_before_bucket, 0), 0), 0
 # MAGIC         )                                            AS shortage_quantity_uom1_raw,
+# MAGIC 
+# MAGIC         -- "what-if Open PO ก็มาช่วย" — scenario เสริม (รวม Open + time-phased Released)
+# MAGIC         -- ใช้เฉพาะคอลัมน์ suggested_qty_if_open_released เพื่อโชว์ทางเลือก
 # MAGIC         GREATEST(
-# MAGIC             available_qty_atp + incoming_po_released_qty + incoming_po_open_qty
+# MAGIC             available_qty_atp + po_released_available_this_bucket + incoming_po_open_qty
 # MAGIC                 - COALESCE(cumulative_demand_before_bucket, 0), 0
 # MAGIC         )                                            AS available_before_bucket_if_open,
 # MAGIC         GREATEST(
 # MAGIC             demand_quantity_uom1_bucket
 # MAGIC                 - GREATEST(available_qty_atp
-# MAGIC                     + incoming_po_released_qty + incoming_po_open_qty
+# MAGIC                     + po_released_available_this_bucket + incoming_po_open_qty
 # MAGIC                     - COALESCE(cumulative_demand_before_bucket, 0), 0), 0
 # MAGIC         )                                            AS shortage_qty_if_open_released,
 # MAGIC 
-# MAGIC         -- 🆕 v9.4.22: UOM2 shortage (for dual-UOM items)
+# MAGIC         -- 🆕 UOM2 shortage (released-only, time-phased)
 # MAGIC         GREATEST(
-# MAGIC             available_qty_atp_uom2 + incoming_po_released_qty_uom2 + incoming_po_open_qty_uom2
+# MAGIC             available_qty_atp_uom2 + po_released_available_this_bucket_uom2
 # MAGIC                 - COALESCE(cumulative_demand_uom2_before_bucket, 0), 0
 # MAGIC         )                                            AS available_before_bucket_uom2,
 # MAGIC         GREATEST(
 # MAGIC             firmed_bom_qty_uom2
-# MAGIC                 - GREATEST(available_qty_atp_uom2 + incoming_po_released_qty_uom2 + incoming_po_open_qty_uom2
+# MAGIC                 - GREATEST(available_qty_atp_uom2 + po_released_available_this_bucket_uom2
 # MAGIC                     - COALESCE(cumulative_demand_uom2_before_bucket, 0), 0), 0
 # MAGIC         )                                            AS shortage_quantity_uom2_raw
 # MAGIC     FROM v6_with_running
@@ -9589,7 +8812,7 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MAGIC         ELSE 'OK'
 # MAGIC     END                                              AS alert_flag,
 # MAGIC 
-# MAGIC     'v9.4.22'                                        AS source_version,    -- ⭐ BUMPED
+# MAGIC     'v9.4.24'                                        AS source_version,    -- ⭐ BUMPED
 # MAGIC     CURRENT_TIMESTAMP()                              AS view_built_at
 # MAGIC 
 # MAGIC FROM v6_with_order_dates_full
@@ -9597,7 +8820,7 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MAGIC 
 # MAGIC 
 # MAGIC -- ============================================================================
-# MAGIC -- 🆕 v9.4.22 verification — UOM2-first shortage logic
+# MAGIC -- 🆕 v9.4.24 verification — time-phased PO + released-only
 # MAGIC -- ============================================================================
 # MAGIC 
 # MAGIC -- VC1: FCG-000610-18KWPD canary — dual-UOM item (item_uom2_code = 'CM')
@@ -9647,12 +8870,300 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MAGIC WHERE firmed_bom_qty > 0;
 # MAGIC 
 # MAGIC 
+# MAGIC -- VC7: 🆕 v9.4.24 TIME-PHASE canary — shortage ต้องโผล่ใน bucket ก่อน PO มาถึง
+# MAGIC -- DI-RD-000362: PO receipt 6/5. W22 (ก่อน 6/5) demand 244, onhand 77 → ต้องเห็น shortage
+# MAGIC SELECT
+# MAGIC     item_no, bucket_week, bucket_end_date, earliest_po_receipt_date,
+# MAGIC     demand_quantity_uom1_bucket,
+# MAGIC     available_qty_atp_uom1               AS onhand,
+# MAGIC     incoming_po_released_qty             AS po_total,
+# MAGIC     available_before_bucket_uom1         AS avail_before,
+# MAGIC     shortage_quantity_uom1, should_trigger, final_uom1, alert_flag
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
+# MAGIC WHERE item_no = 'DI-RD-000362'
+# MAGIC ORDER BY bucket_week;
+# MAGIC -- ✅ คาด: W20-W22 (ก่อน 6/5) po_counted=0 → shortage>0 ที่ W22 (~167)
+# MAGIC --         W23+ (>=6/5) po_counted=660 → shortage=0
+# MAGIC 
+# MAGIC 
+# MAGIC -- VC8: canary ขาดหนัก FCS-000173-SLV (PO receipt 6/23, demand ก่อนนั้น 4,140 vs onhand 50)
+# MAGIC SELECT
+# MAGIC     item_no, bucket_week, bucket_end_date, earliest_po_receipt_date,
+# MAGIC     demand_quantity_uom1_bucket,
+# MAGIC     available_qty_atp_uom1 AS onhand,
+# MAGIC     incoming_po_released_qty AS po_total,
+# MAGIC     shortage_quantity_uom1, should_trigger, final_uom1, alert_flag
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
+# MAGIC WHERE item_no = 'FCS-000173-SLV'
+# MAGIC ORDER BY bucket_week;
+# MAGIC -- ✅ คาด: bucket ก่อน 6/23 → shortage โผล่, NEEDS_ORDER
+# MAGIC 
+# MAGIC 
+# MAGIC -- VC9: 🆕 ตรวจว่า Open PO ไม่ถูกนับเป็น supply อีก (released-only)
+# MAGIC -- item ที่มีแค่ Open PO (ไม่มี Released) demand>onhand → ต้องเห็น shortage
+# MAGIC SELECT
+# MAGIC     COUNT(*) AS rows_with_open_po_no_released,
+# MAGIC     SUM(CASE WHEN shortage_quantity_uom1 > 0 THEN 1 ELSE 0 END) AS now_showing_shortage
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
+# MAGIC WHERE incoming_po_open_qty > 0
+# MAGIC   AND incoming_po_released_qty = 0
+# MAGIC   AND demand_quantity_uom1_bucket > available_qty_atp_uom1;
+# MAGIC -- ✅ คาด: now_showing_shortage > 0 (เดิม Open PO บังไว้ ตอนนี้ไม่บังแล้ว)
+# MAGIC 
+# MAGIC 
 # MAGIC -- VC4: Cascade timestamp
 # MAGIC SELECT 'V6'                          AS layer, MAX(view_built_at) AS last_built
 # MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Material_Availability
 # MAGIC UNION ALL
-# MAGIC SELECT 'fabric_req v9.4.22', MAX(view_built_at)
+# MAGIC SELECT 'fabric_req v9.4.24', MAX(view_built_at)
 # MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# MARKDOWN ********************
+
+# # nb_gold_pur_item_summary
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC -- ============================================================================
+# MAGIC -- nb_gold_pur_summary · SINGLE-CELL VERSION (v9.4.9 compatible)
+# MAGIC -- ============================================================================
+# MAGIC -- Paste entire content into ONE Spark notebook cell, then "Run cell"
+# MAGIC -- 
+# MAGIC -- What it does (in order):
+# MAGIC --   1. Build gold_pur_item_summary  (~1,518 rows, item-level)
+# MAGIC --   2. Build gold_pur_bucket_detail (~2,842 rows, bucket-level + flags)
+# MAGIC --   3. Update v_pur_item_summary view to point to new table
+# MAGIC --   4. Verify with FCB-000591-BR
+# MAGIC --
+# MAGIC -- Date: 2026-05-05 (updated for v9.4.9)
+# MAGIC -- Source: fabric_requisition_line v9.4.9
+# MAGIC -- 
+# MAGIC -- v9.4.9 ADDITIONS (4 UI enrichment cols carried through to Gold tables):
+# MAGIC --   - best_stock_location
+# MAGIC --   - replenishment_system  
+# MAGIC --   - item_total_demand_uom1
+# MAGIC --   - item_total_firmed_demand_uom2
+# MAGIC -- ============================================================================
+# MAGIC 
+# MAGIC -- Environment
+# MAGIC SET spark.microsoft.delta.optimizeWrite.enabled = false;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInWrite = CORRECTED;
+# MAGIC SET spark.sql.parquet.datetimeRebaseModeInRead  = CORRECTED;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============================================================================
+# MAGIC -- TABLE A · gold_pur_item_summary (item-level)
+# MAGIC -- ============================================================================
+# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
+# MAGIC USING DELTA
+# MAGIC TBLPROPERTIES (
+# MAGIC   'delta.autoOptimize.optimizeWrite' = 'false',
+# MAGIC   'description' = 'PUR-facing item summary, materialized from fabric_requisition_line v9.4.6 with v9.4.7 policy-aware aggregation. 1 row per item.'
+# MAGIC )
+# MAGIC AS
+# MAGIC WITH item_rows AS (
+# MAGIC   SELECT *
+# MAGIC   FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
+# MAGIC   WHERE should_trigger = TRUE
+# MAGIC     AND final_uom1 > 0
+# MAGIC ),
+# MAGIC ranked AS (
+# MAGIC   SELECT
+# MAGIC     item_rows.*,
+# MAGIC     ROW_NUMBER() OVER (
+# MAGIC       PARTITION BY item_no
+# MAGIC       ORDER BY bucket_start_date ASC
+# MAGIC     ) AS bucket_rank,
+# MAGIC     FIRST_VALUE(final_uom1) OVER (
+# MAGIC       PARTITION BY item_no
+# MAGIC       ORDER BY bucket_start_date ASC
+# MAGIC       ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+# MAGIC     ) AS earliest_bucket_final_uom1,
+# MAGIC     FIRST_VALUE(final_uom2) OVER (
+# MAGIC       PARTITION BY item_no
+# MAGIC       ORDER BY bucket_start_date ASC
+# MAGIC       ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+# MAGIC     ) AS earliest_bucket_final_uom2,
+# MAGIC     FIRST_VALUE(suggested_qty_if_open_released) OVER (
+# MAGIC       PARTITION BY item_no
+# MAGIC       ORDER BY bucket_start_date ASC
+# MAGIC       ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+# MAGIC     ) AS earliest_bucket_qty_if_open_released
+# MAGIC   FROM item_rows
+# MAGIC )
+# MAGIC SELECT
+# MAGIC   -- Identity
+# MAGIC   item_no,
+# MAGIC   MAX(description)              AS description,
+# MAGIC   MAX(item_category_code)       AS item_category_code,
+# MAGIC   MAX(item_uom2_code)           AS item_uom2_code,
+# MAGIC   MAX(base_uom_uom1)            AS base_uom_uom1,
+# MAGIC   MAX(module)                   AS module,
+# MAGIC   MAX(archetype)                AS archetype,
+# MAGIC   MAX(reordering_policy)        AS reordering_policy,
+# MAGIC   MAX(vendor_no)                AS vendor_no,
+# MAGIC   MAX(vendor_name)              AS vendor_name,
+# MAGIC   
+# MAGIC   -- Bucket window
+# MAGIC   MIN(bucket_week)              AS earliest_bucket,
+# MAGIC   MAX(bucket_week)              AS latest_bucket,
+# MAGIC   CONCAT(MIN(bucket_week), ' → ', MAX(bucket_week)) AS bucket_window_display,
+# MAGIC   COUNT(*)                      AS bucket_count,
+# MAGIC   
+# MAGIC   -- Demand (always SUM)
+# MAGIC   SUM(demand_quantity_uom1_bucket) AS qty_uom1,
+# MAGIC   SUM(firmed_bom_qty_uom2)         AS qty_uom2,
+# MAGIC   
+# MAGIC   -- Stock state (item-level)
+# MAGIC   MAX(onhand_quantity_uom1)        AS onhand_uom1,
+# MAGIC   MAX(onhand_quantity_uom2)        AS onhand_uom2,
+# MAGIC   MAX(available_qty_atp_uom1)      AS available_atp_uom1,
+# MAGIC   MAX(available_qty_atp_uom2)      AS available_atp_uom2,
+# MAGIC   MAX(incoming_po_released_qty)    AS incoming_released_uom1,
+# MAGIC   MAX(incoming_po_open_qty)        AS incoming_open_uom1,
+# MAGIC   MAX(incoming_po_released_qty_uom2) AS incoming_released_uom2,
+# MAGIC   MAX(incoming_po_open_qty_uom2)   AS incoming_open_uom2,
+# MAGIC   CONCAT('R: ', ROUND(MAX(incoming_po_released_qty), 2), 
+# MAGIC          ' | O: ', ROUND(MAX(incoming_po_open_qty), 2)) AS incoming_uom1_display,
+# MAGIC   CONCAT('R: ', ROUND(MAX(incoming_po_released_qty_uom2), 2), 
+# MAGIC          ' | O: ', ROUND(MAX(incoming_po_open_qty_uom2), 2)) AS incoming_uom2_display,
+# MAGIC   MIN(earliest_po_receipt_date)    AS po_receipt_date,
+# MAGIC   MAX(CASE WHEN has_pending_open_po THEN 1 ELSE 0 END) = 1 AS has_pending_open_po,
+# MAGIC   
+# MAGIC   -- Suggested order qty · POLICY-AWARE ★ THE FIX ★
+# MAGIC   CASE 
+# MAGIC     WHEN MAX(reordering_policy) IN ('Fixed Reorder Qty.', 'Maximum Qty.') 
+# MAGIC       THEN MAX(earliest_bucket_final_uom1)
+# MAGIC     ELSE 
+# MAGIC       SUM(final_uom1)
+# MAGIC   END AS final_uom1,
+# MAGIC   
+# MAGIC   CASE 
+# MAGIC     WHEN MAX(reordering_policy) IN ('Fixed Reorder Qty.', 'Maximum Qty.') 
+# MAGIC       THEN MAX(earliest_bucket_final_uom2)
+# MAGIC     ELSE 
+# MAGIC       SUM(final_uom2)
+# MAGIC   END AS final_uom2,
+# MAGIC   
+# MAGIC   CASE 
+# MAGIC     WHEN MAX(reordering_policy) IN ('Fixed Reorder Qty.', 'Maximum Qty.') 
+# MAGIC       THEN MAX(earliest_bucket_qty_if_open_released)
+# MAGIC     ELSE 
+# MAGIC       SUM(suggested_qty_if_open_released)
+# MAGIC   END AS suggested_qty_if_open_released,
+# MAGIC   
+# MAGIC   CONCAT(MAX(base_uom_uom1), ' / ', MAX(item_uom2_code)) AS uoms_display,
+# MAGIC   
+# MAGIC   -- Alerts
+# MAGIC   MAX(alert_flag)                  AS alert_flag,
+# MAGIC   MAX(CASE alert_flag
+# MAGIC         WHEN 'CRITICAL' THEN 5 WHEN 'HIGH' THEN 4
+# MAGIC         WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 2
+# MAGIC         WHEN 'INFO' THEN 1 ELSE 0
+# MAGIC       END)                         AS alert_severity,
+# MAGIC   MIN(projected_stockout_date)     AS projected_stockout_date,
+# MAGIC   MIN(suggested_order_date_actionable) AS order_due_date,
+# MAGIC   MAX(CASE po_urgency
+# MAGIC         WHEN 'OVERDUE' THEN 5 WHEN 'URGENT' THEN 4
+# MAGIC         WHEN 'HIGH' THEN 3 WHEN 'NORMAL' THEN 2
+# MAGIC         WHEN 'LOW' THEN 1 ELSE 0
+# MAGIC       END)                         AS po_urgency_severity,
+# MAGIC   
+# MAGIC   -- Cost · POLICY-AWARE
+# MAGIC   MAX(unit_cost)                   AS unit_cost,
+# MAGIC   MAX(unit_cost_source)            AS unit_cost_source,
+# MAGIC   CASE 
+# MAGIC     WHEN MAX(reordering_policy) IN ('Fixed Reorder Qty.', 'Maximum Qty.') 
+# MAGIC       THEN MAX(earliest_bucket_final_uom1) * MAX(unit_cost)
+# MAGIC     ELSE 
+# MAGIC       SUM(cost_amount)
+# MAGIC   END AS est_cost,
+# MAGIC   
+# MAGIC   -- Forecast
+# MAGIC   MAX(forecast_demand_60d)         AS forecast_demand_60d,
+# MAGIC   MAX(avg_daily_usage)             AS avg_daily_usage,
+# MAGIC   
+# MAGIC   -- Metadata
+# MAGIC   MAX(customer_no)                 AS customer_no,
+# MAGIC   MAX(CASE WHEN is_dnd THEN 1 ELSE 0 END) = 1 AS is_dnd,
+# MAGIC   MAX(CASE WHEN is_critical THEN 1 ELSE 0 END) = 1 AS is_critical,
+# MAGIC   MAX(priority_score)              AS priority_score,
+# MAGIC   
+# MAGIC   -- ⭐ v9.4.9: UI enrichment cols (carry through from engine)
+# MAGIC   MAX(best_stock_location)         AS best_stock_location,
+# MAGIC   MAX(replenishment_system)        AS replenishment_system,
+# MAGIC   MAX(item_total_demand_uom1)      AS item_total_demand_uom1,
+# MAGIC   MAX(item_total_firmed_demand_uom2) AS item_total_firmed_demand_uom2,
+# MAGIC   
+# MAGIC   MAX(source_version)              AS source_version,
+# MAGIC   current_timestamp()              AS materialized_at
+# MAGIC FROM ranked
+# MAGIC GROUP BY item_no;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============================================================================
+# MAGIC -- TABLE B · gold_pur_bucket_detail (bucket-level + dedup helpers)
+# MAGIC -- ============================================================================
+# MAGIC CREATE OR REPLACE TABLE Gold_Inventory_Lakehouse.mrp.gold_pur_bucket_detail
+# MAGIC USING DELTA
+# MAGIC TBLPROPERTIES (
+# MAGIC   'delta.autoOptimize.optimizeWrite' = 'false',
+# MAGIC   'description' = 'PUR per-bucket detail with dedup helpers. Use is_earliest_bucket=TRUE for ROP items to avoid double-counting in SUM.'
+# MAGIC )
+# MAGIC AS
+# MAGIC SELECT
+# MAGIC   f.*,
+# MAGIC   CASE WHEN ROW_NUMBER() OVER (
+# MAGIC       PARTITION BY f.item_no 
+# MAGIC       ORDER BY f.bucket_start_date ASC
+# MAGIC   ) = 1 THEN TRUE ELSE FALSE END AS is_earliest_bucket,
+# MAGIC   CASE 
+# MAGIC       WHEN f.reordering_policy IN ('Fixed Reorder Qty.', 'Maximum Qty.')
+# MAGIC         THEN 'POLICY_DRIVEN'
+# MAGIC       ELSE 'DEMAND_DRIVEN'
+# MAGIC   END AS dedup_class,
+# MAGIC   current_timestamp() AS materialized_at
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line f
+# MAGIC WHERE f.should_trigger = TRUE 
+# MAGIC   AND f.final_uom1 > 0;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============================================================================
+# MAGIC -- VIEW · point v_pur_item_summary to new table (backward compat)
+# MAGIC -- ============================================================================
+# MAGIC CREATE OR REPLACE VIEW Gold_Inventory_Lakehouse.mrp.v_pur_item_summary AS
+# MAGIC SELECT *
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary;
+# MAGIC 
+# MAGIC 
+# MAGIC -- ============================================================================
+# MAGIC -- VERIFY · canary FCB-000591-BR + row counts (last query, returns to user)
+# MAGIC -- ============================================================================
+# MAGIC SELECT
+# MAGIC     '✅ DEPLOYED v9.4.9' AS status,
+# MAGIC     (SELECT COUNT(*) FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary) AS item_summary_rows,
+# MAGIC     (SELECT COUNT(*) FROM Gold_Inventory_Lakehouse.mrp.gold_pur_bucket_detail) AS bucket_detail_rows,
+# MAGIC     (SELECT final_uom1 FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
+# MAGIC      WHERE item_no = 'FCB-000591-BR') AS canary_final_uom1,
+# MAGIC     (SELECT best_stock_location FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
+# MAGIC      WHERE item_no = 'FCB-000591-BR') AS canary_location,
+# MAGIC     (SELECT replenishment_system FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
+# MAGIC      WHERE item_no = 'FCB-000591-BR') AS canary_repl,
+# MAGIC     (SELECT item_total_demand_uom1 FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
+# MAGIC      WHERE item_no = 'FCB-000591-BR') AS canary_total_demand,
+# MAGIC     CASE WHEN (SELECT final_uom1 FROM Gold_Inventory_Lakehouse.mrp.gold_pur_item_summary
+# MAGIC                WHERE item_no = 'FCB-000591-BR') = 8000
+# MAGIC          THEN '✅ canary OK'
+# MAGIC          ELSE '❌ canary FAIL'
+# MAGIC     END AS canary_check;
 
 # METADATA ********************
 
@@ -10953,3 +10464,54 @@ print("✅ UDFs registered: calc_wax_start, calc_semi_start, sub_working_days, c
 # MARKDOWN ********************
 
 # # Verification (VC1-VC8)
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC SELECT
+# MAGIC     item_no, bucket_week, bucket_start_date, bucket_end_date,
+# MAGIC     demand_quantity_uom1_bucket    AS demand,
+# MAGIC     available_qty_atp_uom1         AS onhand,
+# MAGIC     incoming_po_released_qty       AS po_total,
+# MAGIC     earliest_po_receipt_date       AS po_eta,
+# MAGIC     available_before_bucket_uom1   AS avail_before,
+# MAGIC     shortage_quantity_uom1         AS shortage,
+# MAGIC     should_trigger, final_uom1, alert_flag,
+# MAGIC     sales_line_ship_date, due_date
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.fabric_requisition_line
+# MAGIC WHERE item_no = 'FCS-000970-SLV'
+# MAGIC ORDER BY bucket_week;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# CELL ********************
+
+# MAGIC %%sql
+# MAGIC SELECT
+# MAGIC     component_item_no, demand_type, required_qty, required_date,
+# MAGIC     source_record_id, source_so_no
+# MAGIC FROM Gold_Inventory_Lakehouse.mrp.gold_Material_Availability
+# MAGIC WHERE component_item_no = 'FCS-000970-SLV' AND required_qty > 0
+# MAGIC ORDER BY required_date;
+
+# METADATA ********************
+
+# META {
+# META   "language": "sparksql",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# CELL ********************
+
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }

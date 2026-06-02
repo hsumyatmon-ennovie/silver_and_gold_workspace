@@ -9,7 +9,7 @@
         "startDateTime": "2026-02-24T13:21:00",
         "endDateTime": "2027-02-24T13:21:00",
         "localTimeZoneId": "SE Asia Standard Time",
-        "interval": 300
+        "interval": 60
       }
     }
   ]

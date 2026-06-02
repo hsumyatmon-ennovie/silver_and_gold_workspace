@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Notebook",
+    "displayName": "Silver to Gold - Notebook 10 - Plating"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "81b3e6d1-eacd-b74f-4094-4b9b03c844a9"
+  }
+}

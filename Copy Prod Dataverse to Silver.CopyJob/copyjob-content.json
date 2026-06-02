@@ -6,8 +6,8 @@
       "connectionSettings": {
         "type": "Lakehouse",
         "typeProperties": {
-          "workspaceId": "17f91c34-23a9-4685-b7f6-2246823b5572",
-          "artifactId": "785307fd-af78-4359-969a-51c937ec834b",
+          "workspaceId": "7c954bb5-a79b-4ee6-8a2f-9c56a4c04732",
+          "artifactId": "55415fbd-45aa-47ab-95db-711ca68ed1e3",
           "rootFolder": "Tables"
         }
       }

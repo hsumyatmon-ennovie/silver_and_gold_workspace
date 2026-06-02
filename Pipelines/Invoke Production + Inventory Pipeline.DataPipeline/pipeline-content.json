@@ -22,7 +22,7 @@
         "type": "IfCondition",
         "typeProperties": {
           "expression": {
-            "value": "@if(\n  or(\n    or(\n      less(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 7),\n      greaterOrEquals(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 19)\n    ),\n    or(\n      equals(dayOfWeek(addHours(utcNow(), 7)), 0),\n      equals(dayOfWeek(addHours(utcNow(), 7)), 6)\n    )\n  ),\n  false,\n  true\n)\n",
+            "value": "@if(\n  or(\n      less(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 7),\n      greaterOrEquals(int(formatDateTime(addHours(utcNow(), 7), 'HH')), 19)\n  ),\n  false,\n  true\n)",
             "type": "Expression"
           },
           "ifTrueActivities": [
